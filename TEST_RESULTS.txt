@@ -1,0 +1,20 @@
+DictaType 1.0.0 verification
+
+Automated unit tests: 9 passed
+- exact strict scoring
+- flexible accent/case handling
+- balanced French accent detection
+- missing and extra word analysis
+- sentence splitting
+- WPM calculation
+- default database and teacher PIN
+- lesson/student/attempt persistence
+- backup and restore
+
+Smoke tests:
+- Desktop interface instantiated successfully with Student, Teacher, Classroom and Settings pages.
+- Local classroom server started successfully.
+- Browser session metadata loaded successfully.
+- Simulated student submission was scored and stored successfully.
+
+Note: The Windows executable itself must be built on Windows. The repository includes a local build script and a GitHub Actions Windows build workflow.

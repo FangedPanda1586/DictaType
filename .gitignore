@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.db
+*.db-wal
+*.db-shm
+build/
+dist/
+installer_output/
+.pytest_cache/

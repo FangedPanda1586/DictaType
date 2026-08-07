@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=70", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dictatype"
+version = "1.0.0"
+description = "Offline English and French dictation and typing assessment application"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "GPL-3.0-or-later"}
+authors = [{name = "DictaType contributors"}]
+dependencies = [
+  "pyttsx3>=2.98,<3",
+  "python-docx>=1.1,<2",
+  "openpyxl>=3.1,<4",
+  "pywin32>=306; sys_platform == 'win32'",
+]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Environment :: Win32 (MS Windows)",
+  "Intended Audience :: Education",
+  "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+  "Programming Language :: Python :: 3",
+  "Topic :: Education",
+]
+
+[project.scripts]
+dictatype = "dictatype.main:main"
+
+[tool.setuptools]
+packages = ["dictatype"]
