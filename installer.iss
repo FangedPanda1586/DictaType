@@ -18,7 +18,7 @@ SolidCompression=yes
 WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-SetupIconFile=assets\dictatype.ico
+SetupIconFile=dictatype.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 PrivilegesRequired=lowest
 
