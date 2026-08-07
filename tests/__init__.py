@@ -1,0 +1,1 @@
+"""DictaType automated tests package."""
