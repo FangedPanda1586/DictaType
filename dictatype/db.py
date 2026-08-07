@@ -382,24 +382,29 @@ class Database:
                 backup_conn.close()
         return destination
 
-    def restore(self, source: Path) -> None:
+   def restore(self, source: Path) -> None:
         source = source.expanduser().resolve()
+
         if not source.exists():
             raise FileNotFoundError(source)
+
         test_conn = sqlite3.connect(source)
 
-try:
-    test_conn.execute(
-        "SELECT name FROM sqlite_master LIMIT 1"
-    ).fetchone()
-finally:
-    test_conn.close()
+        try:
+            test_conn.execute(
+                "SELECT name FROM sqlite_master LIMIT 1"
+            ).fetchone()
+        finally:
+            test_conn.close()
 
-shutil.copy2(source, self.path)
+        shutil.copy2(source, self.path)
+
         for suffix in ("-wal", "-shm"):
             stale = Path(str(self.path) + suffix)
+
             if stale.exists():
                 stale.unlink()
+
         self.initialize()
 
     def export_lessons(self, lesson_ids: Iterable[int] | None = None) -> list[dict[str, Any]]:
