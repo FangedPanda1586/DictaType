@@ -17,6 +17,7 @@ from typing import Any, Callable
 
 from .classroom import ClassroomServer
 from .db import Database, app_data_dir
+from .reporting import save_attempt_pdf
 from .scoring import calculate_wpm, score_text, split_sentences
 from .tts import SpeechEngine, Voice, list_voices, verbalize_punctuation
 
@@ -418,13 +419,59 @@ class ResultDialog(tk.Toplevel):
         self.comment_var = tk.StringVar(value=self.attempt.get("teacher_comment", ""))
         ttk.Entry(comment_frame, textvariable=self.comment_var).pack(side="left", fill="x", expand=True)
         ttk.Button(comment_frame, text="Save comment", style="Secondary.TButton", command=self.save_comment).pack(side="left", padx=(10, 0))
-        ttk.Button(outer, text="Save report as HTML", style="Secondary.TButton", command=self.save_report).pack(anchor="e", pady=(12, 0))
+        report_buttons = ttk.Frame(outer)
+        report_buttons.pack(fill="x", pady=(12, 0))
+        ttk.Button(
+            report_buttons,
+            text="Save analysis as PDF",
+            style="Accent.TButton",
+            command=self.save_pdf_report,
+        ).pack(side="right")
+        ttk.Button(
+            report_buttons,
+            text="Save report as HTML",
+            style="Secondary.TButton",
+            command=self.save_report,
+        ).pack(side="right", padx=(0, 8))
 
     def save_comment(self):
         self.app.db.update_attempt_comment(int(self.attempt["id"]), self.comment_var.get())
         self.attempt["teacher_comment"] = self.comment_var.get()
         self.app.refresh_all()
         messagebox.showinfo("Saved", "The teacher comment was saved.", parent=self)
+
+    def save_pdf_report(self):
+        student_name = str(self.attempt.get("student_name", "result")).strip() or "result"
+        safe_name = "".join(
+            char if char.isalnum() or char in {"-", "_", " "} else "_"
+            for char in student_name
+        ).strip().replace(" ", "_") or "result"
+        path = filedialog.asksaveasfilename(
+            parent=self,
+            defaultextension=".pdf",
+            filetypes=[("PDF document", "*.pdf")],
+            initialfile=f"DictaType_{safe_name}_analysis.pdf",
+        )
+        if not path:
+            return
+        try:
+            save_attempt_pdf(
+                self.attempt,
+                path,
+                teacher_comment=self.comment_var.get(),
+            )
+        except Exception as exc:
+            messagebox.showerror(
+                "PDF export failed",
+                f"The PDF could not be created.\n\n{exc}",
+                parent=self,
+            )
+            return
+        messagebox.showinfo(
+            "PDF saved",
+            "The assessment analysis was saved as a PDF.",
+            parent=self,
+        )
 
     def save_report(self):
         path = filedialog.asksaveasfilename(parent=self, defaultextension=".html", filetypes=[("HTML report", "*.html")], initialfile=f"DictaType_{self.attempt.get('student_name','result')}.html")

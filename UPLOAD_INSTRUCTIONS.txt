@@ -1,0 +1,19 @@
+DictaType PDF Export Update
+===========================
+
+Upload these files to the SAME paths in your GitHub repository:
+
+- dictatype/ui.py              -> replace existing file
+- dictatype/reporting.py       -> new file
+- tests/test_reporting.py      -> new file
+- requirements.txt             -> replace existing file
+- pyproject.toml               -> replace existing file
+
+Then run GitHub Actions -> Build Windows release -> Run workflow.
+
+What changes:
+- Adds a "Save analysis as PDF" button in the Result window.
+- PDF includes student/class/dictation/date, scores, WPM, time, replays,
+  marking analysis, student answer, corrections, and teacher comment.
+- Adds ReportLab as a dependency.
+- Adds an automated PDF creation test.
