@@ -1,4 +1,4 @@
-name: Build Windows release - French v3
+name: Build Windows release - French v6
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 env:
-  DICTATYPE_PIPELINE_VERSION: "french-v3-self-staging"
+  DICTATYPE_PIPELINE_VERSION: "french-v6-python-json-only"
   FRENCH_VOICE_NAME: "fr_FR-siwis-medium"
 
 jobs:
@@ -84,7 +84,8 @@ jobs:
           if ($config.Length -lt 500) {
             throw "French configuration is unexpectedly small: $($config.Length) bytes."
           }
-          Get-Content $destConfig -Raw | ConvertFrom-Json | Out-Null
+          python -c "import json,sys; json.load(open(sys.argv[1], encoding='utf-8')); print('French config JSON validated with Python.')" "$destConfig"
+          if ($LASTEXITCODE -ne 0) { throw "Python JSON validation failed for $destConfig" }
 
           Write-Host "French neural voice staged successfully:"
           Get-Item $destModel, $destConfig | Select-Object FullName, Length
@@ -146,7 +147,8 @@ jobs:
           if (-not (Test-Path $modelPath)) { throw "Installer model still missing: $modelPath" }
           if (-not (Test-Path $configPath)) { throw "Installer config still missing: $configPath" }
           if ((Get-Item $modelPath).Length -lt 50000000) { throw "Installer model is incomplete." }
-          Get-Content $configPath -Raw | ConvertFrom-Json | Out-Null
+          python -c "import json,sys; json.load(open(sys.argv[1], encoding='utf-8')); print('Installer French config JSON validated with Python.')" "$configPath"
+          if ($LASTEXITCODE -ne 0) { throw "Python JSON validation failed for $configPath" }
 
           Write-Host "Installer French voice inputs confirmed:"
           Get-Item $modelPath, $configPath | Select-Object FullName, Length
