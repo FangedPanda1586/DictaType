@@ -355,6 +355,22 @@ class ResultDialog(tk.Toplevel):
         ttk.Label(header, text=self.attempt.get("student_name", "Student"), style="PageTitle.TLabel").pack(side="left")
         ttk.Label(header, text=self.attempt.get("lesson_title", ""), style="Muted.TLabel").pack(side="right")
 
+        # Keep export controls near the top so they stay visible on small screens.
+        export_bar = ttk.Frame(outer)
+        export_bar.pack(fill="x", pady=(10, 0))
+        ttk.Button(
+            export_bar,
+            text="Save PDF",
+            style="Accent.TButton",
+            command=self.save_pdf_report,
+        ).pack(side="left")
+        ttk.Button(
+            export_bar,
+            text="Save HTML",
+            style="Secondary.TButton",
+            command=self.save_report,
+        ).pack(side="left", padx=(8, 0))
+
         metrics = ttk.Frame(outer)
         metrics.pack(fill="x", pady=16)
         values = [
@@ -419,20 +435,6 @@ class ResultDialog(tk.Toplevel):
         self.comment_var = tk.StringVar(value=self.attempt.get("teacher_comment", ""))
         ttk.Entry(comment_frame, textvariable=self.comment_var).pack(side="left", fill="x", expand=True)
         ttk.Button(comment_frame, text="Save comment", style="Secondary.TButton", command=self.save_comment).pack(side="left", padx=(10, 0))
-        report_buttons = ttk.Frame(outer)
-        report_buttons.pack(fill="x", pady=(12, 0))
-        ttk.Button(
-            report_buttons,
-            text="Save analysis as PDF",
-            style="Accent.TButton",
-            command=self.save_pdf_report,
-        ).pack(side="right")
-        ttk.Button(
-            report_buttons,
-            text="Save report as HTML",
-            style="Secondary.TButton",
-            command=self.save_report,
-        ).pack(side="right", padx=(0, 8))
 
     def save_comment(self):
         self.app.db.update_attempt_comment(int(self.attempt["id"]), self.comment_var.get())
