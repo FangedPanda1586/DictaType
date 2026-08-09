@@ -31,7 +31,8 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 
 [Files]
 Source: "dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
-Source: "dist\voices\*"; DestDir: "{app}\voices"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "assets\voices\fr_FR-siwis-medium.onnx"; DestDir: "{app}\voices"; Flags: ignoreversion
+Source: "assets\voices\fr_FR-siwis-medium.onnx.json"; DestDir: "{app}\voices"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
