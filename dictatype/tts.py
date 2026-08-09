@@ -51,7 +51,7 @@ except Exception:  # pragma: no cover
 
 
 BUNDLED_FRENCH_VOICE_ID = "dictatype:piper:fr_FR-siwis-medium"
-BUNDLED_FRENCH_MODEL = "fr_FR-siwis-medium.onnx"
+BUNDLED_FRENCH_MODEL = "french.onnx"
 BUNDLED_FRENCH_NAME = "DictaType French Neural"
 
 

@@ -11,7 +11,7 @@ AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\DictaType
 DefaultGroupName=DictaType
 DisableProgramGroupPage=yes
-OutputDir=installer_output
+OutputDir=installer-output
 OutputBaseFilename=DictaType-Setup
 Compression=lzma2
 SolidCompression=yes
@@ -31,8 +31,8 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 
 [Files]
 Source: "dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
-Source: "assets\voices\fr_FR-siwis-medium.onnx"; DestDir: "{app}\voices"; Flags: ignoreversion
-Source: "assets\voices\fr_FR-siwis-medium.onnx.json"; DestDir: "{app}\voices"; Flags: ignoreversion
+Source: "assets\voices\french.onnx"; DestDir: "{app}\voices"; Flags: ignoreversion
+Source: "assets\voices\french.onnx.json"; DestDir: "{app}\voices"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

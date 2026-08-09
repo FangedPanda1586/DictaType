@@ -1,52 +1,35 @@
-DictaType French Neural Voice - External Runtime Fix
-=================================================
+DictaType French neural path fix
+================================
 
-WHY THIS FIX
-------------
-The French ONNX model is now installed beside DictaType.exe instead of being
-embedded inside the PyInstaller one-file payload. This is more reliable and is
-also faster on 4 GB RAM / HDD classroom PCs because the ~60 MB voice model does
-not need to be extracted to a temporary directory every time DictaType starts.
+Replace these files in your GitHub repository using the files from this package.
+Do NOT copy their contents from formatted chat text. Upload the actual files.
 
-UPLOAD / REPLACE
-----------------
-dictatype/ui.py
-dictatype/db.py
-dictatype/classroom.py
-dictatype/tts.py
-dictatype/reporting.py
-dictatype/performance.py
-dictatype/main.py
+1. dictatype/tts.py
+2. installer.iss
+3. .github/workflows/windows-build.yml
+4. tests/test_french_release_filename.py   (new file)
 
-requirements.txt
-pyproject.toml
-DictaType.spec
-installer.iss
-.github/workflows/windows-build.yml
-assets/voices/NOTICE.txt
+The fix deliberately uses simple release filenames with no underscores:
 
-tests/test_security.py
-tests/test_history_exam.py
-tests/test_exam_bundle.py
-tests/test_french_voice.py
-tests/test_performance.py
-tests/test_french_packaging.py
+assets/voices/french.onnx
+assets/voices/french.onnx.json
+installer-output/DictaType-Setup.exe
 
-IMPORTANT
----------
-Keep dictatype.ico at the repository root.
+The Piper downloader may still download its original fr_FR-siwis-medium files,
+but the workflow immediately copies them to the simple filenames above. DictaType
+and the installer use only the simple release filenames.
 
-After the GitHub build, the portable ZIP must contain:
-  DictaType/DictaType.exe
-  DictaType/voices/fr_FR-siwis-medium.onnx
-  DictaType/voices/fr_FR-siwis-medium.onnx.json
+After committing, run:
+GitHub -> Actions -> Build Windows release -> Run workflow
 
-The installer places the same two voice files in:
-  <DictaType install folder>/voices/
+Before Inno Setup, confirm the log has:
+- Download built-in French neural voice: success
+- Verify French neural voice inside built EXE: success
+- Verify installer French voice sources: success
 
-The GitHub workflow synthesizes a real French sentence using the FINISHED EXE
-and the staged external voice directory. If that test fails, the release stops.
+The Inno Setup [Files] lines should mention:
+assets\voices\french.onnx
+assets\voices\french.onnx.json
 
-After installation:
-Teacher -> Settings & Security -> Test French neural voice
-should audibly speak a French test sentence.
+The Inno output directory should be:
+installer-output
