@@ -2,7 +2,7 @@
 
 **DictaType** is an offline, open-source English and French dictation and typing assessment application for teachers and students. Teachers create their own passages, select an installed Windows voice, configure the exercise, and review detailed results. Students hear the passage without seeing it and type what they heard.
 
-![DictaType icon](assets/dictatype.png)
+![DictaType icon](dictatype.ico)
 
 ## Main features
 
