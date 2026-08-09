@@ -18,7 +18,7 @@ from typing import Any, Callable
 
 from .classroom import ClassroomServer
 from .db import Database, app_data_dir
-from .reporting import save_attempt_pdf
+from .reporting import save_attempt_pdf, save_exam_pdf
 from .scoring import calculate_wpm, score_text, split_sentences
 from .tts import SpeechEngine, Voice, list_voices, verbalize_punctuation
 
@@ -1121,6 +1121,7 @@ class StudentPage(ttk.Frame):
                 "class_name": student.get("class_name", ""),
                 "lesson_id": self.current_lesson["id"],
                 "lesson_title": self.current_lesson["title"],
+                "expected_text": self.current_lesson["text"],
                 "answer": answer,
                 "score_word": result.word_accuracy,
                 "score_char": result.character_accuracy,
@@ -1280,7 +1281,8 @@ class TeacherPage(ttk.Frame):
         bar.grid(row=1, column=0, sticky="ew", pady=(0, 10))
         RoundedButton(bar, text="View result", style="Accent.TButton", command=self.view_result).pack(side="left")
         RoundedButton(bar, text="Student history", style="Secondary.TButton", command=self.view_result_student_history).pack(side="left", padx=6)
-        RoundedButton(bar, text="Delete", style="Danger.TButton", command=self.delete_result).pack(side="left")
+        RoundedButton(bar, text="Full exam PDF", style="Secondary.TButton", command=self.save_selected_exam_report).pack(side="left")
+        RoundedButton(bar, text="Delete", style="Danger.TButton", command=self.delete_result).pack(side="left", padx=6)
         RoundedButton(bar, text="Export Excel", style="Secondary.TButton", command=self.export_results_xlsx).pack(side="right")
         RoundedButton(bar, text="Export CSV", style="Secondary.TButton", command=self.export_results_csv).pack(side="right", padx=6)
         columns = ("date", "student", "class", "exam", "lesson", "score", "wpm", "source")
@@ -1508,6 +1510,40 @@ class TeacherPage(ttk.Frame):
             }
         StudentHistoryDialog(self.app, student)
 
+    def save_selected_exam_report(self):
+        attempt_id = self.selected_id(self.results_tree)
+        if attempt_id is None:
+            messagebox.showinfo("Select an exam result", "Select any passage from the student's exam first.", parent=self)
+            return
+        attempt = self.db.get_attempt(attempt_id)
+        if not attempt or not str(attempt.get("exam_session_id", "")).strip() or not str(attempt.get("source", "")).startswith("classroom-exam"):
+            messagebox.showinfo("Not an exam result", "That result is not part of an Exam session. Full exam reports combine every passage from one exam.", parent=self)
+            return
+        items = self.db.list_exam_attempts(
+            attempt.get("exam_session_id", ""),
+            attempt.get("student_id"),
+            attempt.get("student_name", ""),
+            attempt.get("class_name", ""),
+        )
+        if not items:
+            messagebox.showerror("Exam report", "The exam passages could not be found.", parent=self)
+            return
+        safe_student = "".join(c if c.isalnum() or c in "-_ " else "_" for c in str(attempt.get("student_name", "Student"))).strip().replace(" ", "_") or "Student"
+        safe_exam = "".join(c if c.isalnum() or c in "-_ " else "_" for c in str(attempt.get("exam_title", "Exam"))).strip().replace(" ", "_") or "Exam"
+        path = filedialog.asksaveasfilename(
+            parent=self,
+            defaultextension=".pdf",
+            filetypes=[("PDF document", "*.pdf")],
+            initialfile=f"DictaType_{safe_student}_{safe_exam}.pdf",
+        )
+        if not path:
+            return
+        try:
+            save_exam_pdf(items, path)
+            messagebox.showinfo("Exam report saved", f"One PDF containing all {len(items)} passage(s) was created.", parent=self)
+        except Exception as exc:
+            messagebox.showerror("Exam report failed", str(exc), parent=self)
+
     def delete_result(self):
         attempt_id = self.selected_id(self.results_tree)
         if attempt_id is not None and messagebox.askyesno("Delete result", "Permanently delete this result?", parent=self):
@@ -1569,7 +1605,7 @@ class ClassroomPage(ttk.Frame):
         ttk.Label(self, text="Local classroom & exams", style="PageTitle.TLabel").pack(anchor="w")
         ttk.Label(
             self,
-            text="Select one dictation for practice or several passages for an exam. Students join from a browser on the same local network.",
+            text="Choose Classroom for normal practice or Exam for a controlled multi-passage assessment. Students join from a browser on the same local network.",
             style="Muted.TLabel",
             wraplength=900,
         ).pack(anchor="w", pady=(4, 16))
@@ -1577,20 +1613,39 @@ class ClassroomPage(ttk.Frame):
         card = Card(self)
         card.pack(fill="x")
         card.columnconfigure(1, weight=1)
-        ttk.Label(card, text="Exam / session title").grid(row=0, column=0, sticky="w", padx=(0, 12), pady=7)
-        self.exam_title_var = tk.StringVar(value="Classroom Exam")
-        ttk.Entry(card, textvariable=self.exam_title_var).grid(row=0, column=1, sticky="ew", pady=7)
+
+        ttk.Label(card, text="Session type").grid(row=0, column=0, sticky="w", padx=(0, 12), pady=7)
+        self.session_type_var = tk.StringVar(value="Classroom")
+        self.session_type_combo = ttk.Combobox(
+            card,
+            textvariable=self.session_type_var,
+            values=["Classroom", "Exam"],
+            state="readonly",
+            width=18,
+        )
+        self.session_type_combo.grid(row=0, column=1, sticky="w", pady=7)
+        self.session_type_combo.bind("<<ComboboxSelected>>", lambda _e: self._session_type_changed())
+
         ttk.Label(card, text="Starting port").grid(row=0, column=2, sticky="w", padx=(18, 8), pady=7)
         self.port_var = tk.IntVar(value=8765)
         ttk.Spinbox(card, from_=1024, to=65535, textvariable=self.port_var, width=10).grid(row=0, column=3, sticky="w", pady=7)
 
-        ttk.Label(card, text="Passages / dictations").grid(row=1, column=0, sticky="nw", padx=(0, 12), pady=(10, 7))
+        ttk.Label(card, text="Session title").grid(row=1, column=0, sticky="w", padx=(0, 12), pady=7)
+        self.exam_title_var = tk.StringVar(value="Classroom Practice")
+        ttk.Entry(card, textvariable=self.exam_title_var).grid(row=1, column=1, columnspan=3, sticky="ew", pady=7)
+
+        self.session_help_var = tk.StringVar()
+        ttk.Label(card, textvariable=self.session_help_var, style="CardMuted.TLabel", wraplength=780).grid(
+            row=2, column=1, columnspan=3, sticky="w", pady=(0, 8)
+        )
+
+        ttk.Label(card, text="Passages / dictations").grid(row=3, column=0, sticky="nw", padx=(0, 12), pady=(10, 7))
         list_frame = ttk.Frame(card, style="Field.TFrame")
-        list_frame.grid(row=1, column=1, columnspan=3, sticky="nsew", pady=(10, 7))
+        list_frame.grid(row=3, column=1, columnspan=3, sticky="nsew", pady=(10, 7))
         list_frame.columnconfigure(0, weight=1)
         self.lesson_listbox = tk.Listbox(
             list_frame,
-            selectmode="extended",
+            selectmode="browse",
             height=7,
             exportselection=False,
             activestyle="none",
@@ -1606,20 +1661,43 @@ class ClassroomPage(ttk.Frame):
         scroll = ttk.Scrollbar(list_frame, command=self.lesson_listbox.yview)
         scroll.grid(row=0, column=1, sticky="ns")
         self.lesson_listbox.configure(yscrollcommand=scroll.set)
-        ttk.Label(card, text="Hold Ctrl to choose separate passages, or use Select all. The selected order is the exam order.", style="CardMuted.TLabel").grid(row=2, column=1, columnspan=3, sticky="w", pady=(0, 8))
 
         selection_buttons = ttk.Frame(card, style="Card.TFrame")
-        selection_buttons.grid(row=3, column=1, columnspan=3, sticky="w", pady=(0, 8))
-        RoundedButton(selection_buttons, text="Select all", style="Secondary.TButton", command=self.select_all).pack(side="left")
+        selection_buttons.grid(row=4, column=1, columnspan=3, sticky="w", pady=(0, 8))
+        self.select_all_button = RoundedButton(selection_buttons, text="Select all passages", style="Secondary.TButton", command=self.select_all)
+        self.select_all_button.pack(side="left")
         RoundedButton(selection_buttons, text="Clear selection", style="Secondary.TButton", command=self.clear_selection).pack(side="left", padx=8)
 
         self.allow_new_profiles_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(card, text="Allow students who are not yet registered to create a profile when they join", variable=self.allow_new_profiles_var).grid(row=4, column=1, columnspan=3, sticky="w", pady=(2, 0))
-        ttk.Label(card, text="For a formal exam, untick this to lock the session to profiles already registered by name and class.", style="CardMuted.TLabel").grid(row=5, column=1, columnspan=3, sticky="w", pady=(2, 8))
+        ttk.Checkbutton(
+            card,
+            text="Allow new students to create a profile when they join",
+            variable=self.allow_new_profiles_var,
+        ).grid(row=5, column=1, columnspan=3, sticky="w", pady=(2, 0))
+
+        self.enhanced_audio_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            card,
+            text="Use teacher-computer audio for clearer and consistent dictation",
+            variable=self.enhanced_audio_var,
+        ).grid(row=6, column=1, columnspan=3, sticky="w", pady=(8, 0))
+
+        self.french_clarity_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            card,
+            text="French clarity mode (slower French speech for better comprehension)",
+            variable=self.french_clarity_var,
+        ).grid(row=7, column=1, columnspan=3, sticky="w", pady=(3, 0))
+        ttk.Label(
+            card,
+            text="Enhanced audio uses the voice selected in each dictation. If it cannot be generated, the student's browser automatically falls back to its best matching voice.",
+            style="CardMuted.TLabel",
+            wraplength=780,
+        ).grid(row=8, column=1, columnspan=3, sticky="w", pady=(2, 8))
 
         buttons = ttk.Frame(card, style="Card.TFrame")
-        buttons.grid(row=6, column=0, columnspan=4, sticky="ew", pady=(12, 0))
-        self.start_button = RoundedButton(buttons, text="Start classroom / exam", style="Accent.TButton", command=self.start_server)
+        buttons.grid(row=9, column=0, columnspan=4, sticky="ew", pady=(12, 0))
+        self.start_button = RoundedButton(buttons, text="Start classroom", style="Accent.TButton", command=self.start_server)
         self.start_button.pack(side="left")
         self.stop_button = RoundedButton(buttons, text="Stop", style="Danger.TButton", command=self.stop_server, state="disabled")
         self.stop_button.pack(side="left", padx=8)
@@ -1638,14 +1716,22 @@ class ClassroomPage(ttk.Frame):
         self.session_summary_var = tk.StringVar(value="")
         ttk.Label(session_card, textvariable=self.session_summary_var, style="Muted.TLabel").grid(row=2, column=1, columnspan=2, sticky="w", pady=(3, 0))
 
-        ttk.Label(self, text="Recent classroom submissions", style="SectionTitle.TLabel").pack(anchor="w", pady=(10, 8))
+        recent_header = ttk.Frame(self, style="Page.TFrame")
+        recent_header.pack(fill="x", pady=(10, 8))
+        ttk.Label(recent_header, text="Recent classroom submissions", style="SectionTitle.TLabel").pack(side="left")
+        RoundedButton(recent_header, text="View result", style="Secondary.TButton", command=self.view_submission).pack(side="right")
+        RoundedButton(recent_header, text="Save full exam PDF", style="Accent.TButton", command=self.save_exam_report).pack(side="right", padx=8)
+
         frame = ttk.Frame(self)
         frame.pack(fill="both", expand=True)
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(0, weight=1)
-        columns = ("date", "student", "class", "exam", "lesson", "score")
-        self.tree = ttk.Treeview(frame, columns=columns, show="headings")
-        for column, title, width in [("date", "Date", 145), ("student", "Student", 170), ("class", "Class", 100), ("exam", "Exam / session", 190), ("lesson", "Passage", 240), ("score", "Score", 80)]:
+        columns = ("date", "student", "class", "type", "exam", "lesson", "score")
+        self.tree = ttk.Treeview(frame, columns=columns, show="headings", selectmode="browse")
+        for column, title, width in [
+            ("date", "Date", 135), ("student", "Student", 160), ("class", "Class", 90),
+            ("type", "Type", 85), ("exam", "Exam / session", 175), ("lesson", "Passage", 220), ("score", "Score", 75),
+        ]:
             self.tree.heading(column, text=title)
             self.tree.column(column, width=width, anchor="w")
         self.tree.grid(row=0, column=0, sticky="nsew")
@@ -1653,9 +1739,33 @@ class ClassroomPage(ttk.Frame):
         scroll2 = ttk.Scrollbar(frame, command=self.tree.yview)
         scroll2.grid(row=0, column=1, sticky="ns")
         self.tree.configure(yscrollcommand=scroll2.set)
+        self._session_type_changed()
+
+    def _session_type_changed(self):
+        is_exam = self.session_type_var.get() == "Exam"
+        self.lesson_listbox.configure(selectmode="extended" if is_exam else "browse")
+        self.select_all_button.configure(state="normal" if is_exam else "disabled")
+        if is_exam:
+            self.session_help_var.set("Exam mode can contain several passages. Every passage is saved under one exam session and can later be exported as one combined correction PDF.")
+            if self.exam_title_var.get() in {"", "Classroom Practice"}:
+                self.exam_title_var.set("DictaType Exam")
+            self.allow_new_profiles_var.set(False)
+            self.start_button.configure(text="Start exam")
+        else:
+            selections = list(self.lesson_listbox.curselection())
+            if len(selections) > 1:
+                keep = selections[0]
+                self.lesson_listbox.selection_clear(0, "end")
+                self.lesson_listbox.selection_set(keep)
+            self.session_help_var.set("Classroom mode distributes one dictation at a time for normal teaching or practice.")
+            if self.exam_title_var.get() in {"", "DictaType Exam"}:
+                self.exam_title_var.set("Classroom Practice")
+            self.allow_new_profiles_var.set(True)
+            self.start_button.configure(text="Start classroom")
 
     def select_all(self):
-        self.lesson_listbox.selection_set(0, "end")
+        if self.session_type_var.get() == "Exam":
+            self.lesson_listbox.selection_set(0, "end")
 
     def clear_selection(self):
         self.lesson_listbox.selection_clear(0, "end")
@@ -1674,15 +1784,17 @@ class ClassroomPage(ttk.Frame):
                 self.lesson_listbox.selection_set(len(self.lesson_ids) - 1)
         if self.lesson_ids and not self.lesson_listbox.curselection():
             self.lesson_listbox.selection_set(0)
+        self._session_type_changed()
 
         self.tree.delete(*self.tree.get_children())
-        for attempt in [item for item in self.db.list_attempts(300) if str(item.get("source", "")).startswith("classroom")]:
-            exam = attempt.get("exam_title", "") or "Classroom"
-            if attempt.get("exam_item_count", 0) > 1:
+        for attempt in [item for item in self.db.list_attempts(500) if str(item.get("source", "")).startswith("classroom")]:
+            is_exam = str(attempt.get("source", "")).startswith("classroom-exam")
+            exam = attempt.get("exam_title", "") or ("Exam" if is_exam else "Classroom")
+            if is_exam and attempt.get("exam_item_count", 0) > 1:
                 exam += f" {attempt.get('exam_item_index', 0)}/{attempt.get('exam_item_count', 0)}"
             self.tree.insert(
                 "", "end", iid=str(attempt["id"]),
-                values=(attempt.get("created_at", "").replace("T", " ")[:16], attempt.get("student_name", ""), attempt.get("class_name", ""), exam, attempt.get("lesson_title", ""), f"{attempt.get('overall_score',0):.1f}%"),
+                values=(attempt.get("created_at", "").replace("T", " ")[:16], attempt.get("student_name", ""), attempt.get("class_name", ""), "Exam" if is_exam else "Classroom", exam, attempt.get("lesson_title", ""), f"{attempt.get('overall_score',0):.1f}%"),
             )
 
     def start_server(self):
@@ -1694,30 +1806,45 @@ class ClassroomPage(ttk.Frame):
                 if lesson:
                     lessons.append(lesson)
         if not lessons:
-            messagebox.showwarning("Select passages", "Select at least one dictation or passage to distribute.", parent=self)
+            messagebox.showwarning("Select a dictation", "Select at least one dictation or passage to distribute.", parent=self)
             return
-        exam_title = self.exam_title_var.get().strip()
-        if len(lessons) > 1 and not exam_title:
-            messagebox.showwarning("Exam title", "Give this multi-passage exam a title so its results are easy to identify later.", parent=self)
+
+        is_exam = self.session_type_var.get() == "Exam"
+        if not is_exam and len(lessons) != 1:
+            messagebox.showwarning("Classroom mode", "Classroom mode uses one dictation at a time. Choose Exam when you want multiple passages.", parent=self)
             return
-        if len(lessons) == 1 and not exam_title:
-            exam_title = lessons[0].get("title", "Classroom Dictation")
+        title = self.exam_title_var.get().strip()
+        if is_exam and not title:
+            messagebox.showwarning("Exam title", "Give the exam a title so all of its passages can be grouped together in Results.", parent=self)
+            return
+        if not title:
+            title = lessons[0].get("title", "Classroom Dictation")
+
         try:
             url, code = self.app.classroom_server.start(
                 lessons,
                 self.port_var.get(),
-                exam_title=exam_title,
+                exam_title=title,
                 allow_new_profiles=self.allow_new_profiles_var.get(),
+                session_type="exam" if is_exam else "classroom",
+                enhanced_audio=self.enhanced_audio_var.get(),
+                french_clarity=self.french_clarity_var.get(),
             )
             self.url_var.set(url)
             self.code_var.set(code)
-            self.session_summary_var.set(f"{exam_title} · {len(lessons)} passage(s) selected")
+            mode_text = "Exam" if is_exam else "Classroom"
+            self.session_summary_var.set(f"{mode_text}: {title} · {len(lessons)} passage(s)")
             self.start_button.configure(state="disabled")
             self.stop_button.configure(state="normal")
             self.lesson_listbox.configure(state="disabled")
-            messagebox.showinfo("Classroom started", f"Students can open:\n{url}\n\nSession code: {code}\n\nPassages: {len(lessons)}", parent=self)
+            self.session_type_combo.configure(state="disabled")
+            messagebox.showinfo(
+                f"{mode_text} started",
+                f"Students can open:\n{url}\n\nSession code: {code}\n\nPassages: {len(lessons)}",
+                parent=self,
+            )
         except Exception as exc:
-            messagebox.showerror("Could not start classroom", str(exc), parent=self)
+            messagebox.showerror(f"Could not start {'exam' if is_exam else 'classroom'}", str(exc), parent=self)
 
     def stop_server(self):
         self.app.classroom_server.stop()
@@ -1727,20 +1854,60 @@ class ClassroomPage(ttk.Frame):
         self.start_button.configure(state="normal")
         self.stop_button.configure(state="disabled")
         self.lesson_listbox.configure(state="normal")
+        self.session_type_combo.configure(state="readonly")
+        self._session_type_changed()
 
     def copy_details(self):
         if not self.app.classroom_server.running:
             return
-        text = f"DictaType classroom\nAddress: {self.url_var.get()}\nSession code: {self.code_var.get()}\n{self.session_summary_var.get()}"
+        mode = "Exam" if self.app.classroom_server.session_type == "exam" else "Classroom"
+        text = f"DictaType {mode}\nAddress: {self.url_var.get()}\nSession code: {self.code_var.get()}\n{self.session_summary_var.get()}"
         self.clipboard_clear()
         self.clipboard_append(text)
 
-    def view_submission(self, _event=None):
+    def selected_attempt(self) -> dict[str, Any] | None:
         selection = self.tree.selection()
-        if selection:
-            attempt = self.db.get_attempt(int(selection[0]))
-            if attempt:
-                ResultDialog(self.app, attempt)
+        if not selection:
+            return None
+        return self.db.get_attempt(int(selection[0]))
+
+    def view_submission(self, _event=None):
+        attempt = self.selected_attempt()
+        if attempt:
+            ResultDialog(self.app, attempt)
+
+    def save_exam_report(self):
+        attempt = self.selected_attempt()
+        if not attempt:
+            messagebox.showinfo("Select an exam result", "Select any passage from a student's exam first.", parent=self)
+            return
+        if not str(attempt.get("source", "")).startswith("classroom-exam") or not str(attempt.get("exam_session_id", "")).strip():
+            messagebox.showinfo("Not an exam result", "Select an Exam result. Classroom practice contains only an individual result report.", parent=self)
+            return
+        items = self.db.list_exam_attempts(
+            attempt.get("exam_session_id", ""),
+            attempt.get("student_id"),
+            attempt.get("student_name", ""),
+            attempt.get("class_name", ""),
+        )
+        if not items:
+            messagebox.showerror("Exam report", "The exam passages could not be found.", parent=self)
+            return
+        safe_student = "".join(c if c.isalnum() or c in "-_ " else "_" for c in str(attempt.get("student_name", "Student"))).strip().replace(" ", "_") or "Student"
+        safe_exam = "".join(c if c.isalnum() or c in "-_ " else "_" for c in str(attempt.get("exam_title", "Exam"))).strip().replace(" ", "_") or "Exam"
+        path = filedialog.asksaveasfilename(
+            parent=self,
+            defaultextension=".pdf",
+            filetypes=[("PDF document", "*.pdf")],
+            initialfile=f"DictaType_{safe_student}_{safe_exam}.pdf",
+        )
+        if not path:
+            return
+        try:
+            save_exam_pdf(items, path)
+            messagebox.showinfo("Exam report saved", f"All {len(items)} passage(s) were saved in one PDF for correction.", parent=self)
+        except Exception as exc:
+            messagebox.showerror("Exam report failed", str(exc), parent=self)
 
 
 class SettingsPage(ttk.Frame):

@@ -116,6 +116,7 @@ class Database:
                     class_name TEXT NOT NULL DEFAULT '',
                     lesson_id INTEGER,
                     lesson_title TEXT NOT NULL,
+                    expected_text TEXT NOT NULL DEFAULT '',
                     answer TEXT NOT NULL,
                     score_word REAL NOT NULL,
                     score_char REAL NOT NULL,
@@ -149,6 +150,7 @@ class Database:
 
             attempt_columns = {row[1] for row in conn.execute("PRAGMA table_info(attempts)").fetchall()}
             attempt_migrations = {
+                "expected_text": "TEXT NOT NULL DEFAULT ''",
                 "exam_session_id": "TEXT NOT NULL DEFAULT ''",
                 "exam_title": "TEXT NOT NULL DEFAULT ''",
                 "exam_item_index": "INTEGER NOT NULL DEFAULT 0",
@@ -510,11 +512,11 @@ class Database:
                 """
                 INSERT INTO attempts(
                     student_id, student_name, class_name, lesson_id, lesson_title,
-                    answer, score_word, score_char, overall_score, wpm,
+                    expected_text, answer, score_word, score_char, overall_score, wpm,
                     duration_seconds, replay_count, details_json, source,
                     teacher_comment, exam_session_id, exam_title,
                     exam_item_index, exam_item_count, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload.get("student_id"),
@@ -522,6 +524,7 @@ class Database:
                     payload.get("class_name", ""),
                     payload.get("lesson_id"),
                     payload.get("lesson_title", "Unknown lesson"),
+                    payload.get("expected_text", ""),
                     payload.get("answer", ""),
                     float(payload.get("score_word", 0)),
                     float(payload.get("score_char", 0)),
@@ -606,6 +609,48 @@ class Database:
             return existing
         return self.create_student_profile(name, class_name)
 
+    def list_exam_attempts(
+        self,
+        exam_session_id: str,
+        student_id: int | None = None,
+        student_name: str = "",
+        class_name: str = "",
+    ) -> list[dict[str, Any]]:
+        """Return all passages belonging to one student's exam session in exam order."""
+        exam_session_id = str(exam_session_id or "").strip()
+        if not exam_session_id:
+            return []
+        with self.connect() as conn:
+            params: list[Any] = [exam_session_id]
+            where = ["a.exam_session_id = ?"]
+            if student_id is not None:
+                where.append("a.student_id = ?")
+                params.append(student_id)
+            else:
+                where.append("lower(a.student_name) = lower(?)")
+                where.append("lower(a.class_name) = lower(?)")
+                params.extend([student_name.strip(), class_name.strip()])
+            rows = conn.execute(
+                f"""
+                SELECT a.*, COALESCE(NULLIF(a.expected_text, ''), l.text, '') AS resolved_expected_text
+                FROM attempts a
+                LEFT JOIN lessons l ON l.id = a.lesson_id
+                WHERE {' AND '.join(where)}
+                ORDER BY a.exam_item_index ASC, a.id ASC
+                """,
+                params,
+            ).fetchall()
+            items: list[dict[str, Any]] = []
+            for row in rows:
+                item = dict(row)
+                item["expected_text"] = item.pop("resolved_expected_text", "")
+                try:
+                    item["details"] = json.loads(item.pop("details_json"))
+                except Exception:
+                    item["details"] = {}
+                items.append(item)
+            return items
+
     def get_attempt(self, attempt_id: int) -> dict[str, Any] | None:
         with self.connect() as conn:
             row = conn.execute("SELECT * FROM attempts WHERE id = ?", (attempt_id,)).fetchone()
@@ -616,6 +661,10 @@ class Database:
                 item["details"] = json.loads(item.pop("details_json"))
             except Exception:
                 item["details"] = {}
+            if not str(item.get("expected_text", "")).strip() and item.get("lesson_id"):
+                lesson = conn.execute("SELECT text FROM lessons WHERE id=?", (item.get("lesson_id"),)).fetchone()
+                if lesson:
+                    item["expected_text"] = lesson["text"]
             return item
 
     def update_attempt_comment(self, attempt_id: int, comment: str) -> None:
