@@ -1,62 +1,31 @@
-DictaType 1.0.0-rc.1 PUBLIC RELEASE PATCH
-==========================================
+DictaType RC1 - French local exercise + Settings scroll fix
+==========================================================
 
-This patch is designed to be applied on top of the current v7 ONEDIR build plus the Python 3.12 winsound compatibility fix.
+Replace/add ONLY these files in the repository:
 
-REPLACE THESE FILES
--------------------
-.github/workflows/windows-build.yml
-CHANGELOG.md
-README.md
-SECURITY.md
-docs/USER_GUIDE.md
-dictatype/tts.py
-dictatype/ui.py
-installer.iss
-pyproject.toml
-tests/test_french_onedir_release.py
-tests/test_winsound_compatibility.py
+1. dictatype/ui.py
+2. tests/test_french_local_and_settings_scroll.py
+3. CHANGELOG.md
 
-ADD THESE NEW FILES
--------------------
-FIRST_RUN.md
-THIRD-PARTY-NOTICES.md
-tests/test_public_release.py
+Do NOT replace the current public RC1 GitHub Actions workflow, DictaType.spec,
+installer.iss, or dictatype/tts.py with older copies.
 
-DO NOT DELETE
--------------
-DictaType.spec
-LICENSE
-dictatype/db.py
-dictatype/classroom.py
-dictatype/performance.py
-dictatype/reporting.py
-dictatype/scoring.py
-or any other current project files.
+After committing the three files above, start a NEW GitHub Actions run.
 
-BUILD / TEST
-------------
-1. Commit all public-release patch files together.
-2. Open GitHub Actions.
-3. Run: Build Windows public release - DictaType v1.0 RC1
-4. Confirm the automated tests pass.
-5. Confirm both Piper checks pass:
-   - Verify Piper with normal Python before frozen test
-   - Verify French neural voice inside finished EXE
-6. Download the DictaType-Windows artifact.
-7. Install DictaType-Setup.exe on a clean Windows PC.
-8. Test Preview Voice with a multi-sentence passage. It should read the whole passage.
-9. Test About DictaType from the login screen.
-10. Test French neural voice, backup/restore, Classroom, Exam, and PDF export.
+What this patch changes
+-----------------------
+- French local/student exercises automatically use the bundled DictaType
+  French neural voice when the model is available, even if an older lesson
+  was saved with a Windows/SAPI French voice.
+- Existing French dictations open with the bundled neural voice selected in
+  the editor, so Preview Voice and newly saved settings are consistent.
+- Settings & Security is vertically scrollable and supports the mouse wheel,
+  keeping backup, voice, About/licensing and other controls reachable on
+  smaller screens.
 
-PUBLIC PRE-RELEASE
-------------------
-Only after the clean-PC checks pass, create the tag:
-
-v1.0.0-rc.1
-
-The workflow will publish a GitHub pre-release with generated release notes.
-
-IMPORTANT
----------
-RC1 may still be unsigned. Windows can display an unknown-publisher / reputation warning until code signing is configured.
+Quick checks after installing the new build
+-------------------------------------------
+1. Open an OLD French dictation that previously used the Windows voice.
+2. Start it from the student exercise screen. It should use DictaType French Neural.
+3. Edit that same French dictation. Voice should show DictaType French Neural.
+4. Open Settings & Security on a small window and scroll to the bottom.

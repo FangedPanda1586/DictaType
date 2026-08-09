@@ -21,7 +21,7 @@ from .db import Database, app_data_dir
 from .performance import apply_runtime_hints, resolve_performance_profile
 from .reporting import save_attempt_pdf, save_exam_pdf
 from .scoring import calculate_wpm, score_text, split_sentences
-from .tts import BUNDLED_FRENCH_VOICE_ID, SpeechEngine, Voice, builtin_french_available, french_voice_diagnostics, list_voices, verbalize_punctuation
+from .tts import BUNDLED_FRENCH_VOICE_ID, SpeechEngine, Voice, builtin_french_available, builtin_french_voice, french_voice_diagnostics, list_voices, verbalize_punctuation
 
 APP_TITLE = "DictaType"
 APP_VERSION = "1.0.0-rc.1"
@@ -559,15 +559,36 @@ class LessonEditor(tk.Toplevel):
         self.show_results_var.set(bool(self.lesson.get("show_results", 1)))
         self.text.insert("1.0", self.lesson.get("text", ""))
         self._refresh_voice_values()
-        voice_name = self.lesson.get("voice_name", "")
-        for voice in self.app.voices:
-            if voice.name == voice_name or voice.id == self.lesson.get("voice_id", ""):
-                self.voice_var.set(voice.display_name)
-                break
+        # Existing French lessons may still contain a Windows/SAPI voice saved by
+        # older DictaType builds. Public Windows releases should default those
+        # lessons to the bundled offline neural voice whenever it is available.
+        if self.lesson.get("language") == "fr" and builtin_french_available():
+            neural = next(
+                (voice for voice in self.app.voices if voice.id == BUNDLED_FRENCH_VOICE_ID),
+                None,
+            )
+            if neural is None:
+                neural = builtin_french_voice()
+                current_values = list(self.voice_combo.cget("values"))
+                if neural.display_name not in current_values:
+                    self.voice_combo.configure(values=[neural.display_name, *current_values])
+            self.voice_var.set(neural.display_name)
+        else:
+            voice_name = self.lesson.get("voice_name", "")
+            for voice in self.app.voices:
+                if voice.name == voice_name or voice.id == self.lesson.get("voice_id", ""):
+                    self.voice_var.set(voice.display_name)
+                    break
 
     def selected_voice(self) -> Voice | None:
         display = self.voice_var.get()
-        return next((voice for voice in self.app.voices if voice.display_name == display), None)
+        voice = next((voice for voice in self.app.voices if voice.display_name == display), None)
+        if voice is not None:
+            return voice
+        neural = builtin_french_voice()
+        if builtin_french_available() and display == neural.display_name:
+            return neural
+        return None
 
     def import_text(self):
         path = filedialog.askopenfilename(
@@ -1151,6 +1172,14 @@ class StudentPage(ttk.Frame):
     def current_voice(self) -> Voice | None:
         if not self.current_lesson:
             return None
+        # Older saved French dictations can reference a Windows voice. When the
+        # bundled neural voice is present, local student exercises must use it
+        # too, matching Preview Voice and classroom/exam playback.
+        if self.current_lesson.get("language") == "fr" and builtin_french_available():
+            return next(
+                (voice for voice in self.app.voices if voice.id == BUNDLED_FRENCH_VOICE_ID),
+                builtin_french_voice(),
+            )
         voice_id = self.current_lesson.get("voice_id", "")
         return next((voice for voice in self.app.voices if voice.id == voice_id), None)
 
@@ -2104,23 +2133,68 @@ class ClassroomPage(ttk.Frame):
 
 class SettingsPage(ttk.Frame):
     def __init__(self, app: "DictaTypeApp", master):
-        super().__init__(master, padding=24, style="Page.TFrame")
+        super().__init__(master, padding=0, style="Page.TFrame")
         self.app = app
         self.db = app.db
         self._build()
 
     def _build(self):
-        header = ttk.Frame(self, style="Page.TFrame")
+        # Settings can be taller than 768p once security, performance, backup,
+        # voice and licensing controls are visible. Keep the page usable on
+        # small laptop/classroom displays with a proper vertical scroller.
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+
+        self.settings_canvas = tk.Canvas(
+            self,
+            highlightthickness=0,
+            bd=0,
+            bg=self.app.colors["bg"],
+            takefocus=0,
+        )
+        self.settings_scrollbar = ttk.Scrollbar(
+            self,
+            orient="vertical",
+            command=self.settings_canvas.yview,
+        )
+        self.settings_canvas.configure(yscrollcommand=self.settings_scrollbar.set)
+        self.settings_canvas.grid(row=0, column=0, sticky="nsew")
+        self.settings_scrollbar.grid(row=0, column=1, sticky="ns")
+
+        content = ttk.Frame(self.settings_canvas, padding=24, style="Page.TFrame")
+        self.settings_content = content
+        self._settings_window = self.settings_canvas.create_window(
+            (0, 0),
+            window=content,
+            anchor="nw",
+        )
+
+        def sync_scrollregion(_event=None):
+            self.settings_canvas.configure(scrollregion=self.settings_canvas.bbox("all"))
+
+        def sync_width(event):
+            self.settings_canvas.itemconfigure(self._settings_window, width=max(1, event.width))
+
+        def wheel(event):
+            delta = int(getattr(event, "delta", 0))
+            if delta:
+                self.settings_canvas.yview_scroll(-1 if delta > 0 else 1, "units")
+            return "break"
+
+        content.bind("<Configure>", sync_scrollregion)
+        self.settings_canvas.bind("<Configure>", sync_width)
+
+        header = ttk.Frame(content, style="Page.TFrame")
         header.pack(fill="x")
         ttk.Label(header, text="Settings & security", style="PageTitle.TLabel").pack(side="left")
         ttk.Label(header, text="TEACHER ONLY", style="RoleBadge.TLabel").pack(side="right")
         ttk.Label(
-            self,
+            content,
             text="Security controls, performance, local backups and system voice management.",
             style="Muted.TLabel",
         ).pack(anchor="w", pady=(4, 16))
 
-        security = Card(self)
+        security = Card(content)
         security.pack(fill="x", pady=(0, 12))
         ttk.Label(security, text="Teacher security", style="CardSectionTitle.TLabel").grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 8))
         ttk.Label(
@@ -2132,7 +2206,7 @@ class SettingsPage(ttk.Frame):
         RoundedButton(security, text="Change teacher PIN", style="Secondary.TButton", command=self.change_pin).grid(row=2, column=0, sticky="w", pady=(14, 0))
         RoundedButton(security, text="Lock now", style="Secondary.TButton", command=self.app.logout).grid(row=2, column=1, sticky="w", padx=(8, 0), pady=(14, 0))
 
-        session = Card(self)
+        session = Card(content)
         session.pack(fill="x", pady=(0, 12))
         session.columnconfigure(1, weight=1)
         ttk.Label(session, text="Automatic teacher lock", style="CardSectionTitle.TLabel").grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 8))
@@ -2148,7 +2222,7 @@ class SettingsPage(ttk.Frame):
         ).grid(row=1, column=1, sticky="w")
         RoundedButton(session, text="Save", style="Accent.TButton", command=self.save_lock_setting).grid(row=1, column=2, sticky="e", padx=(12, 0))
 
-        performance = Card(self)
+        performance = Card(content)
         performance.pack(fill="x", pady=(0, 12))
         performance.columnconfigure(1, weight=1)
         ttk.Label(performance, text="Performance", style="CardSectionTitle.TLabel").grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 8))
@@ -2173,7 +2247,7 @@ class SettingsPage(ttk.Frame):
         self.performance_info = ttk.Label(performance, text="", style="CardMuted.TLabel")
         self.performance_info.grid(row=3, column=0, columnspan=3, sticky="w", pady=(8, 0))
 
-        data = Card(self)
+        data = Card(content)
         data.pack(fill="x", pady=(0, 12))
         ttk.Label(data, text="Local data", style="CardSectionTitle.TLabel").pack(anchor="w", pady=(0, 8))
         ttk.Label(data, text=f"Data folder: {app_data_dir()}", style="CardMuted.TLabel").pack(anchor="w")
@@ -2183,17 +2257,17 @@ class SettingsPage(ttk.Frame):
         RoundedButton(buttons, text="Restore database", style="Secondary.TButton", command=self.restore).pack(side="left", padx=8)
         RoundedButton(buttons, text="Open data folder", style="Secondary.TButton", command=lambda: open_folder(app_data_dir())).pack(side="left")
 
-        voices = Card(self)
+        voices = Card(content)
         voices.pack(fill="x")
         ttk.Label(voices, text="System voices", style="CardSectionTitle.TLabel").pack(anchor="w", pady=(0, 8))
-        self.voice_label = ttk.Label(voices, text="", style="CardMuted.TLabel")
+        self.voice_label = ttk.Label(voices, text="", style="CardMuted.TLabel", wraplength=760)
         self.voice_label.pack(anchor="w")
         voice_buttons = ttk.Frame(voices, style="Card.TFrame")
         voice_buttons.pack(anchor="w", pady=(12, 0))
         RoundedButton(voice_buttons, text="Refresh installed voices", style="Secondary.TButton", command=self.refresh_voices).pack(side="left")
         RoundedButton(voice_buttons, text="Test French neural voice", style="Accent.TButton", command=self.test_french_voice).pack(side="left", padx=(8, 0))
 
-        about = Card(self)
+        about = Card(content)
         about.pack(fill="x", pady=(12, 0))
         ttk.Label(about, text="About & licensing", style="CardSectionTitle.TLabel").pack(anchor="w", pady=(0, 8))
         ttk.Label(
@@ -2207,6 +2281,29 @@ class SettingsPage(ttk.Frame):
             style="Secondary.TButton",
             command=lambda: AboutDialog(self.app),
         ).pack(anchor="w", pady=(12, 0))
+
+        # A little breathing room below the final card makes it obvious there
+        # is no hidden content after the user reaches the bottom.
+        ttk.Frame(content, style="Page.TFrame", height=12).pack(fill="x")
+
+        def wheel_up(_event):
+            self.settings_canvas.yview_scroll(-1, "units")
+            return "break"
+
+        def wheel_down(_event):
+            self.settings_canvas.yview_scroll(1, "units")
+            return "break"
+
+        def bind_wheel_tree(widget):
+            # Bind the page and every child so the wheel keeps scrolling even
+            # when the pointer is over a card, button, label or combobox.
+            widget.bind("<MouseWheel>", wheel, add="+")
+            widget.bind("<Button-4>", wheel_up, add="+")
+            widget.bind("<Button-5>", wheel_down, add="+")
+            for child in widget.winfo_children():
+                bind_wheel_tree(child)
+
+        bind_wheel_tree(content)
         self.refresh()
 
     def refresh(self):

@@ -22,6 +22,9 @@ Public release candidate for DictaType 1.0.
 
 ### Fixed
 
+- Local French student exercises now automatically use the bundled DictaType French neural voice when available, including older lessons that were saved with a Windows/SAPI voice.
+- Editing an existing French dictation now selects the bundled neural voice by default so Preview Voice and saved settings stay consistent.
+- Settings & Security now has vertical scrolling and mouse-wheel support so every option remains reachable on smaller displays.
 - Python 3.12 Windows playback compatibility by avoiding a hard dependency on `winsound.SND_SYNC`, which is not present in Python 3.12.
 - French voice packaging, staging, and finished-EXE verification in GitHub Actions.
 - Windows SQLite restore locking by closing the verification connection before replacing the database.
