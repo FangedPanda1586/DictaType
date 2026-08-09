@@ -1,4 +1,4 @@
-name: Build Windows release - French v3
+name: Build Windows release - French v7 onedir
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 env:
-  DICTATYPE_PIPELINE_VERSION: "french-v3-self-staging"
+  DICTATYPE_PIPELINE_VERSION: "french-v7-onedir-native-runtime"
   FRENCH_VOICE_NAME: "fr_FR-siwis-medium"
 
 jobs:
@@ -27,7 +27,7 @@ jobs:
         run: |
           Write-Host "=============================================="
           Write-Host "DictaType pipeline: $env:DICTATYPE_PIPELINE_VERSION"
-          Write-Host "This build MUST stage French audio before Inno Setup."
+          Write-Host "PyInstaller mode: ONEDIR for Piper/ONNX reliability"
           Write-Host "=============================================="
 
       - name: Set up Python
@@ -45,8 +45,20 @@ jobs:
       - name: Run automated tests
         run: python -m unittest discover -s tests -v
 
-      - name: Build portable executable
+      - name: Build DictaType one-folder runtime
         run: python -m PyInstaller --noconfirm --clean DictaType.spec
+
+      - name: Inspect collected Piper runtime
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (-not (Test-Path "dist\DictaType\DictaType.exe")) {
+            throw "ONEDIR build did not create dist\DictaType\DictaType.exe"
+          }
+          Write-Host "DictaType runtime tree (Piper/ONNX highlights):"
+          Get-ChildItem "dist\DictaType" -Recurse -File |
+            Where-Object { $_.FullName -match "piper|espeak|onnxruntime|onnxruntime_providers|espeakbridge" } |
+            Select-Object FullName, Length
 
       - name: Stage French neural voice - mandatory
         shell: powershell
@@ -55,15 +67,13 @@ jobs:
           $ProgressPreference = "SilentlyContinue"
 
           $downloadDir = Join-Path $PWD "voice-download"
-          $releaseVoiceDir = Join-Path $PWD "dist\voices"
+          $releaseVoiceDir = Join-Path $PWD "dist\DictaType\voices"
           New-Item -ItemType Directory -Force -Path $downloadDir | Out-Null
           New-Item -ItemType Directory -Force -Path $releaseVoiceDir | Out-Null
 
           Write-Host "Downloading $env:FRENCH_VOICE_NAME with Piper's official downloader..."
           python -m piper.download_voices $env:FRENCH_VOICE_NAME --data-dir "$downloadDir"
-          if ($LASTEXITCODE -ne 0) {
-            throw "Piper voice downloader failed with exit code $LASTEXITCODE."
-          }
+          if ($LASTEXITCODE -ne 0) { throw "Piper voice downloader failed." }
 
           $sourceModel = Join-Path $downloadDir "$env:FRENCH_VOICE_NAME.onnx"
           $sourceConfig = Join-Path $downloadDir "$env:FRENCH_VOICE_NAME.onnx.json"
@@ -72,47 +82,60 @@ jobs:
 
           if (-not (Test-Path $sourceModel)) { throw "Piper did not create: $sourceModel" }
           if (-not (Test-Path $sourceConfig)) { throw "Piper did not create: $sourceConfig" }
-
           Copy-Item $sourceModel $destModel -Force
           Copy-Item $sourceConfig $destConfig -Force
 
-          $model = Get-Item $destModel
-          $config = Get-Item $destConfig
-          if ($model.Length -lt 50000000) {
-            throw "French model is unexpectedly small: $($model.Length) bytes."
-          }
-          if ($config.Length -lt 500) {
-            throw "French configuration is unexpectedly small: $($config.Length) bytes."
-          }
-          Get-Content $destConfig -Raw | ConvertFrom-Json | Out-Null
+          if ((Get-Item $destModel).Length -lt 50000000) { throw "French model is unexpectedly small." }
+          python -c "import json,sys; json.load(open(sys.argv[1], encoding='utf-8')); print('French config JSON validated with Python.')" "$destConfig"
+          if ($LASTEXITCODE -ne 0) { throw "Python JSON validation failed." }
 
-          Write-Host "French neural voice staged successfully:"
           Get-Item $destModel, $destConfig | Select-Object FullName, Length
-          Write-Host "Model SHA-256: $((Get-FileHash $destModel -Algorithm SHA256).Hash)"
 
-      - name: Verify French release files before EXE test
-        shell: powershell
-        run: |
-          $required = @(
-            "dist\DictaType.exe",
-            "dist\voices\french.onnx",
-            "dist\voices\french.onnx.json"
-          )
-          foreach ($file in $required) {
-            if (-not (Test-Path $file)) { throw "Required release file missing: $file" }
-          }
-          Get-Item $required | Select-Object FullName, Length
-
-      - name: Verify French neural voice inside built EXE
+      - name: Verify Piper with normal Python before frozen test
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
+          @'
+          import wave
+          from pathlib import Path
+          from piper import PiperVoice
+
+          model = Path(r"dist\DictaType\voices\french.onnx")
+          out = Path("python-piper-verification.wav")
+          voice = PiperVoice.load(str(model))
+          with wave.open(str(out), "wb") as wav_file:
+              voice.synthesize_wav("Bonjour. Ceci est un test de DictaType.", wav_file)
+          if not out.exists() or out.stat().st_size <= 44:
+              raise SystemExit("Python Piper synthesis did not create valid audio")
+          print(f"Normal Python Piper synthesis OK: {out.stat().st_size} bytes")
+          '@ | Set-Content -Encoding UTF8 verify_piper.py
+          python verify_piper.py
+
+      - name: Verify French neural voice inside finished EXE
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Continue"
           $report = Join-Path $PWD "french-voice-verification.json"
-          & ".\dist\DictaType.exe" --voice-dir ".\dist\voices" --verify-french-voice --verification-output $report
+          Remove-Item $report -Force -ErrorAction SilentlyContinue
+
+          & ".\dist\DictaType\DictaType.exe" --voice-dir ".\dist\DictaType\voices" --verify-french-voice --verification-output $report
           $exitCode = $LASTEXITCODE
-          if (Test-Path $report) { Get-Content $report }
+
+          Write-Host "Finished EXE exit code: $exitCode"
+          if (Test-Path $report) {
+            Write-Host "----- French voice diagnostic report -----"
+            Get-Content $report
+            Write-Host "------------------------------------------"
+          } else {
+            Write-Host "No diagnostic JSON was produced. The frozen runtime likely failed before DictaType could write the report."
+          }
+
           if ($exitCode -ne 0) {
-            throw "The finished DictaType.exe could not synthesize with the French neural voice."
+            Write-Host "Piper/ONNX files collected in finished runtime:"
+            Get-ChildItem "dist\DictaType" -Recurse -File |
+              Where-Object { $_.FullName -match "piper|espeak|onnxruntime|onnxruntime_providers|espeakbridge" } |
+              Select-Object FullName, Length
+            exit $exitCode
           }
 
       - name: Install Inno Setup
@@ -123,33 +146,14 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
-          $ProgressPreference = "SilentlyContinue"
-
-          # Self-healing guard. The installer is NEVER allowed to run without the voice.
-          $voiceDir = Join-Path $PWD "dist\voices"
-          $modelPath = Join-Path $voiceDir "french.onnx"
-          $configPath = Join-Path $voiceDir "french.onnx.json"
-
-          if ((-not (Test-Path $modelPath)) -or (-not (Test-Path $configPath))) {
-            Write-Warning "French voice was missing immediately before installer build. Restaging it now."
-            $fallbackDir = Join-Path $PWD "voice-download-installer-fallback"
-            New-Item -ItemType Directory -Force -Path $fallbackDir | Out-Null
-            New-Item -ItemType Directory -Force -Path $voiceDir | Out-Null
-
-            python -m piper.download_voices $env:FRENCH_VOICE_NAME --data-dir "$fallbackDir"
-            if ($LASTEXITCODE -ne 0) { throw "Fallback Piper download failed." }
-
-            Copy-Item (Join-Path $fallbackDir "$env:FRENCH_VOICE_NAME.onnx") $modelPath -Force
-            Copy-Item (Join-Path $fallbackDir "$env:FRENCH_VOICE_NAME.onnx.json") $configPath -Force
+          $required = @(
+            "dist\DictaType\DictaType.exe",
+            "dist\DictaType\voices\french.onnx",
+            "dist\DictaType\voices\french.onnx.json"
+          )
+          foreach ($file in $required) {
+            if (-not (Test-Path $file)) { throw "Installer input missing: $file" }
           }
-
-          if (-not (Test-Path $modelPath)) { throw "Installer model still missing: $modelPath" }
-          if (-not (Test-Path $configPath)) { throw "Installer config still missing: $configPath" }
-          if ((Get-Item $modelPath).Length -lt 50000000) { throw "Installer model is incomplete." }
-          Get-Content $configPath -Raw | ConvertFrom-Json | Out-Null
-
-          Write-Host "Installer French voice inputs confirmed:"
-          Get-Item $modelPath, $configPath | Select-Object FullName, Length
 
           $candidatePaths = @(
             "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
@@ -163,29 +167,21 @@ jobs:
           if (-not $iscc) { throw "Inno Setup compiler ISCC.exe was not found." }
 
           & $iscc "installer.iss"
-          if ($LASTEXITCODE -ne 0) {
-            throw "Inno Setup compilation failed with exit code $LASTEXITCODE."
-          }
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup compilation failed." }
 
       - name: Verify installer was created
         shell: powershell
         run: |
-          if (-not (Test-Path "installer-output\DictaType-Setup.exe")) {
-            throw "Installer was not created."
-          }
+          if (-not (Test-Path "installer-output\DictaType-Setup.exe")) { throw "Installer was not created." }
           Get-Item "installer-output\DictaType-Setup.exe" | Select-Object FullName, Length
 
       - name: Package portable build
         shell: powershell
         run: |
-          if (-not (Test-Path "dist\voices\french.onnx")) { throw "Portable package is missing french.onnx." }
-          if (-not (Test-Path "dist\voices\french.onnx.json")) { throw "Portable package is missing french.onnx.json." }
-
-          Remove-Item "portable" -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force -Path "portable\DictaType" | Out-Null
-          Copy-Item "dist\DictaType.exe" "portable\DictaType\DictaType.exe" -Force
-          Copy-Item "dist\voices" "portable\DictaType\voices" -Recurse -Force
-          Compress-Archive -Path "portable\DictaType" -DestinationPath "DictaType-Portable-Windows.zip" -Force
+          if (-not (Test-Path "dist\DictaType\DictaType.exe")) { throw "Portable EXE is missing." }
+          if (-not (Test-Path "dist\DictaType\voices\french.onnx")) { throw "Portable French model is missing." }
+          if (-not (Test-Path "dist\DictaType\voices\french.onnx.json")) { throw "Portable French config is missing." }
+          Compress-Archive -Path "dist\DictaType" -DestinationPath "DictaType-Portable-Windows.zip" -Force
 
       - name: Upload Windows files
         uses: actions/upload-artifact@v4
@@ -194,6 +190,7 @@ jobs:
           path: |
             DictaType-Portable-Windows.zip
             installer-output/DictaType-Setup.exe
+            french-voice-verification.json
           if-no-files-found: error
           retention-days: 30
 
