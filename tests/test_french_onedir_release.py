@@ -26,7 +26,7 @@ class FrenchOnedirReleaseTests(unittest.TestCase):
         text = (ROOT / ".github" / "workflows" / "windows-build.yml").read_text(encoding="utf-8")
         self.assertIn("Verify Piper with normal Python before frozen test", text)
         self.assertIn("Verify French neural voice inside finished EXE", text)
-        self.assertIn("french-v7-onedir-native-runtime", text)
+        self.assertIn("public-rc1-onedir-native-runtime", text)
         self.assertNotIn("ConvertFrom-Json", text)
 
 

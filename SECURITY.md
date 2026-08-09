@@ -1,7 +1,23 @@
 # Security Policy
 
-Please report security issues privately to the repository maintainers rather than opening a public issue containing exploit details.
+## Reporting a security issue
 
-DictaType is intended for supervised local classroom use. The teacher PIN prevents ordinary access to teacher screens but is not a replacement for Windows user-account security. Protect the Windows account and database backups appropriately.
+Please report security issues privately to the repository maintainer rather than publishing exploit details in a public issue. If the repository provides a GitHub Security Advisory / private vulnerability reporting option, prefer that channel.
 
-The local classroom browser mode sends the active passage to the student browser for local speech synthesis. It should not be treated as a hardened examination environment against students using developer tools.
+Include the DictaType version, Windows version, steps to reproduce, and the minimum technical details needed to understand the issue. Do not attach real student databases unless they have been fully anonymised.
+
+## Security model
+
+DictaType is a local-first classroom application. The teacher PIN protects ordinary access to teacher-only screens, while Windows user-account security protects the local files themselves. Keep the Windows account secure and protect database backups as educational records.
+
+Student profiles intentionally do not use passwords or PINs.
+
+## Classroom and exam networking
+
+Classroom and exam sessions operate on the local network. Use trusted classroom networks and stop the session when it is no longer needed.
+
+DictaType reduces unnecessary exposure by serving the active local session only, but it is not intended to replace operating-system hardening, managed examination browsers, or institutional network controls for high-stakes adversarial examinations.
+
+## Backups
+
+Backups can contain student names, classes, answers, scores, comments, and lesson content. Store them according to the privacy and retention requirements that apply to your school or organisation.

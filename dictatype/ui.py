@@ -24,7 +24,8 @@ from .scoring import calculate_wpm, score_text, split_sentences
 from .tts import BUNDLED_FRENCH_VOICE_ID, SpeechEngine, Voice, builtin_french_available, french_voice_diagnostics, list_voices, verbalize_punctuation
 
 APP_TITLE = "DictaType"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.0-rc.1"
+APP_RELEASE_LABEL = "Release Candidate 1"
 
 DARK = {
     "bg": "#20262E",
@@ -83,6 +84,33 @@ def open_folder(path: Path) -> None:
         subprocess.Popen(["open", str(path)])
     else:
         subprocess.Popen(["xdg-open", str(path)])
+
+
+def release_root() -> Path:
+    """Return the folder containing public release documents."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[1]
+
+
+def open_release_document(filename: str, parent=None) -> None:
+    path = release_root() / filename
+    if not path.exists():
+        messagebox.showinfo(
+            "Document not found",
+            f"{filename} is not present in this build.",
+            parent=parent,
+        )
+        return
+    try:
+        if sys.platform == "win32":
+            os.startfile(path)  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(path)])
+        else:
+            subprocess.Popen(["xdg-open", str(path)])
+    except Exception as exc:
+        messagebox.showerror("Open document failed", str(exc), parent=parent)
 
 
 class NoPasteText(tk.Text):
@@ -259,6 +287,94 @@ class RoundedButton(tk.Canvas):
 class Card(ttk.Frame):
     def __init__(self, master, **kwargs):
         super().__init__(master, style="Card.TFrame", padding=kwargs.pop("padding", 18), **kwargs)
+
+
+class AboutDialog(tk.Toplevel):
+    def __init__(self, app: "DictaTypeApp"):
+        super().__init__(app)
+        self.app = app
+        self.title(f"About {APP_TITLE}")
+        self.geometry("610x535")
+        self.minsize(560, 500)
+        self.transient(app)
+        self.grab_set()
+        self.configure(bg=app.colors["bg"])
+
+        outer = ttk.Frame(self, padding=24, style="Page.TFrame")
+        outer.pack(fill="both", expand=True)
+
+        ttk.Label(outer, text=APP_TITLE, style="LoginTitle.TLabel").pack(anchor="w")
+        ttk.Label(
+            outer,
+            text=f"Version {APP_VERSION} · {APP_RELEASE_LABEL}",
+            style="Muted.TLabel",
+        ).pack(anchor="w", pady=(4, 18))
+
+        card = Card(outer, padding=20)
+        card.pack(fill="both", expand=True)
+        ttk.Label(card, text="Offline bilingual dictation", style="CardSectionTitle.TLabel").pack(anchor="w")
+        ttk.Label(
+            card,
+            text=(
+                "DictaType is an open-source English and French dictation and typing assessment "
+                "application for teachers and students. Lessons, student profiles and results are "
+                "stored locally on the computer."
+            ),
+            style="CardMuted.TLabel",
+            wraplength=510,
+            justify="left",
+        ).pack(anchor="w", pady=(6, 16))
+
+        ttk.Label(card, text="Licence", style="CardSectionTitle.TLabel").pack(anchor="w")
+        ttk.Label(
+            card,
+            text="GNU General Public License v3.0 or later (GPL-3.0-or-later).",
+            style="CardMuted.TLabel",
+            wraplength=510,
+        ).pack(anchor="w", pady=(4, 14))
+
+        ttk.Label(card, text="French neural speech", style="CardSectionTitle.TLabel").pack(anchor="w")
+        ttk.Label(
+            card,
+            text=(
+                "The Windows release includes Piper text-to-speech and the fr_FR-siwis-medium voice. "
+                "Attribution and third-party licence information are included with the application."
+            ),
+            style="CardMuted.TLabel",
+            wraplength=510,
+            justify="left",
+        ).pack(anchor="w", pady=(4, 14))
+
+        ttk.Label(card, text="Privacy", style="CardSectionTitle.TLabel").pack(anchor="w")
+        ttk.Label(
+            card,
+            text=(
+                "DictaType has no built-in advertising, cloud account or telemetry. Classroom mode "
+                "uses the local network between the teacher computer and student browsers."
+            ),
+            style="CardMuted.TLabel",
+            wraplength=510,
+            justify="left",
+        ).pack(anchor="w", pady=(4, 0))
+
+        buttons = ttk.Frame(outer, style="Page.TFrame")
+        buttons.pack(fill="x", pady=(16, 0))
+        RoundedButton(
+            buttons,
+            text="Read README",
+            style="Secondary.TButton",
+            command=lambda: open_release_document("README.md", self),
+        ).pack(side="left")
+        RoundedButton(
+            buttons,
+            text="Third-party notices",
+            style="Secondary.TButton",
+            command=lambda: open_release_document("THIRD-PARTY-NOTICES.md", self),
+        ).pack(side="left", padx=(8, 0))
+        RoundedButton(buttons, text="Close", style="Accent.TButton", command=self.destroy).pack(side="right")
+
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+
 
 
 class PinDialog(simpledialog.Dialog):
@@ -484,13 +600,16 @@ class LessonEditor(tk.Toplevel):
         if not content:
             messagebox.showwarning("No passage", "Enter a passage before previewing it.", parent=self)
             return
-        sample = split_sentences(content)[0] if split_sentences(content) else content[:300]
+        # Public-release behavior: Preview Voice reads the complete passage so
+        # teachers can verify pronunciation, pacing, names and punctuation
+        # before saving. Student replay limits are unchanged.
+        preview_text = content
         language = "fr" if self.language_var.get() == "Français" else "en"
         if self.punctuation_var.get():
-            sample = verbalize_punctuation(sample, language)
+            preview_text = verbalize_punctuation(preview_text, language)
         voice = self.selected_voice()
         self.app.speech.speak(
-            sample,
+            preview_text,
             voice_id=voice.id if voice else "",
             rate=self.rate_var.get(),
             on_error=lambda exc: self.app.post(lambda: messagebox.showerror("Speech error", str(exc), parent=self)),
@@ -2073,6 +2192,21 @@ class SettingsPage(ttk.Frame):
         voice_buttons.pack(anchor="w", pady=(12, 0))
         RoundedButton(voice_buttons, text="Refresh installed voices", style="Secondary.TButton", command=self.refresh_voices).pack(side="left")
         RoundedButton(voice_buttons, text="Test French neural voice", style="Accent.TButton", command=self.test_french_voice).pack(side="left", padx=(8, 0))
+
+        about = Card(self)
+        about.pack(fill="x", pady=(12, 0))
+        ttk.Label(about, text="About & licensing", style="CardSectionTitle.TLabel").pack(anchor="w", pady=(0, 8))
+        ttk.Label(
+            about,
+            text=f"DictaType {APP_VERSION} · GPL-3.0-or-later · Public release candidate",
+            style="CardMuted.TLabel",
+        ).pack(anchor="w")
+        RoundedButton(
+            about,
+            text="About DictaType",
+            style="Secondary.TButton",
+            command=lambda: AboutDialog(self.app),
+        ).pack(anchor="w", pady=(12, 0))
         self.refresh()
 
     def refresh(self):
@@ -2268,6 +2402,14 @@ class LoginPage(ttk.Frame):
             wraplength=470,
             justify="center",
         ).grid(row=2, column=0, pady=(16, 0))
+        about_row = ttk.Frame(wrapper, style="Page.TFrame")
+        about_row.grid(row=3, column=0, pady=(12, 0))
+        RoundedButton(
+            about_row,
+            text=f"About DictaType {APP_VERSION}",
+            style="Secondary.TButton",
+            command=lambda: AboutDialog(self.app),
+        ).pack()
         self.set_role("student")
 
     def refresh_profiles(self):

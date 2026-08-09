@@ -1,21 +1,62 @@
-DictaType - Python 3.12 winsound compatibility fix
-==================================================
+DictaType 1.0.0-rc.1 PUBLIC RELEASE PATCH
+==========================================
 
-Problem fixed
+This patch is designed to be applied on top of the current v7 ONEDIR build plus the Python 3.12 winsound compatibility fix.
+
+REPLACE THESE FILES
+-------------------
+.github/workflows/windows-build.yml
+CHANGELOG.md
+README.md
+SECURITY.md
+docs/USER_GUIDE.md
+dictatype/tts.py
+dictatype/ui.py
+installer.iss
+pyproject.toml
+tests/test_french_onedir_release.py
+tests/test_winsound_compatibility.py
+
+ADD THESE NEW FILES
+-------------------
+FIRST_RUN.md
+THIRD-PARTY-NOTICES.md
+tests/test_public_release.py
+
+DO NOT DELETE
 -------------
-The Windows build uses Python 3.12. winsound.SND_SYNC was added only in
-Python 3.14, so neural voice playback raised:
+DictaType.spec
+LICENSE
+dictatype/db.py
+dictatype/classroom.py
+dictatype/performance.py
+dictatype/reporting.py
+dictatype/scoring.py
+or any other current project files.
 
-    module 'winsound' has no attribute 'SND_SYNC'
+BUILD / TEST
+------------
+1. Commit all public-release patch files together.
+2. Open GitHub Actions.
+3. Run: Build Windows public release - DictaType v1.0 RC1
+4. Confirm the automated tests pass.
+5. Confirm both Piper checks pass:
+   - Verify Piper with normal Python before frozen test
+   - Verify French neural voice inside finished EXE
+6. Download the DictaType-Windows artifact.
+7. Install DictaType-Setup.exe on a clean Windows PC.
+8. Test Preview Voice with a multi-sentence passage. It should read the whole passage.
+9. Test About DictaType from the login screen.
+10. Test French neural voice, backup/restore, Classroom, Exam, and PDF export.
 
-Python 3.12 already plays PlaySound synchronously by default. This patch uses
-SND_FILENAME plus SND_SYNC only when the running Python version provides it.
+PUBLIC PRE-RELEASE
+------------------
+Only after the clean-PC checks pass, create the tag:
 
-Replace these files in the repository
--------------------------------------
-1. dictatype/tts.py
-2. tests/test_winsound_compatibility.py
+v1.0.0-rc.1
 
-Do NOT replace the v7 ONEDIR workflow, DictaType.spec, or installer.iss.
+The workflow will publish a GitHub pre-release with generated release notes.
 
-Then commit and start a NEW GitHub Actions run.
+IMPORTANT
+---------
+RC1 may still be unsigned. Windows can display an unknown-publisher / reputation warning until code signing is configured.
