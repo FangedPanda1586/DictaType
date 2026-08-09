@@ -1887,11 +1887,19 @@ class ClassroomPage(ttk.Frame):
         RoundedButton(selection_buttons, text="Clear selection", style="Secondary.TButton", command=self.clear_selection).pack(side="left", padx=8)
 
         self.allow_new_profiles_var = tk.BooleanVar(value=True)
+        join_policy_frame = ttk.Frame(card, style="Card.TFrame")
+        join_policy_frame.grid(row=5, column=1, columnspan=3, sticky="ew", pady=(2, 0))
         ttk.Checkbutton(
-            card,
-            text="Allow new students to create a profile when they join",
+            join_policy_frame,
+            text="Open join: students enter their own name and class (recommended)",
             variable=self.allow_new_profiles_var,
-        ).grid(row=5, column=1, columnspan=3, sticky="w", pady=(2, 0))
+        ).pack(anchor="w")
+        ttk.Label(
+            join_policy_frame,
+            text="Keep this enabled for a normal network exam. Turn it off only when you want to restrict the room to student profiles that already exist on the teacher computer.",
+            style="CardMuted.TLabel",
+            wraplength=760,
+        ).pack(anchor="w", pady=(2, 0))
 
         self.enhanced_audio_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
@@ -1952,6 +1960,13 @@ class ClassroomPage(ttk.Frame):
         RoundedButton(session_card, text="Copy details", style="Secondary.TButton", command=self.copy_details).grid(row=1, column=2, padx=(8, 0))
         self.session_summary_var = tk.StringVar(value="")
         ttk.Label(session_card, textvariable=self.session_summary_var, style="Muted.TLabel").grid(row=2, column=1, columnspan=2, sticky="w", pady=(3, 0))
+        self.network_status_var = tk.StringVar(value="Network access: room not running")
+        ttk.Label(
+            session_card,
+            textvariable=self.network_status_var,
+            style="Muted.TLabel",
+            wraplength=760,
+        ).grid(row=3, column=1, columnspan=2, sticky="w", pady=(3, 0))
 
         recent_header = ttk.Frame(content, style="Page.TFrame")
         recent_header.pack(fill="x", pady=(10, 8))
@@ -2018,10 +2033,10 @@ class ClassroomPage(ttk.Frame):
         self.lesson_listbox.configure(selectmode="extended" if is_exam else "browse")
         self.select_all_button.configure(state="normal" if is_exam else "disabled")
         if is_exam:
-            self.session_help_var.set("Exam mode can contain several passages. Every passage is saved under one exam session and can later be exported as one combined correction PDF.")
+            self.session_help_var.set("Exam mode opens a room on the local network. Students join in a browser with the room address and code, then enter their own name and class. Several passages can be grouped into one combined exam report.")
             if self.exam_title_var.get() in {"", "Classroom Practice"}:
                 self.exam_title_var.set("DictaType Exam")
-            self.allow_new_profiles_var.set(False)
+            self.allow_new_profiles_var.set(True)
             self.start_button.configure(text="Start exam")
         else:
             selections = list(self.lesson_listbox.curselection())
@@ -2126,12 +2141,17 @@ class ClassroomPage(ttk.Frame):
             self.code_var.set(code)
             mode_text = "Exam" if is_exam else "Classroom"
             self.room_banner_var.set(
-                f"{mode_text}: {title} · Address: {url} · Code: {code} · Preparing audio in background…"
+                f"{mode_text}: {title} · LAN OPEN · Address: {url} · Code: {code} · Preparing audio in background…"
                 if self.app.classroom_server.audio_preparing
-                else f"{mode_text}: {title} · Address: {url} · Code: {code} · READY"
+                else f"{mode_text}: {title} · LAN OPEN · Address: {url} · Code: {code} · READY"
             )
             self.session_summary_var.set(
                 f"{mode_text}: {title} · {len(lessons)} passage(s) · {self.app.performance.label}"
+            )
+            detected_urls = self.app.classroom_server.network_urls
+            url_text = " · ".join(detected_urls) if detected_urls else url
+            self.network_status_var.set(
+                f"Network access: OPEN on all local adapters · Student address(es): {url_text} · Students enter name + class + session code."
             )
             self.stop_button.configure(state="normal")
             self.lesson_listbox.configure(state="disabled")
@@ -2148,7 +2168,7 @@ class ClassroomPage(ttk.Frame):
             )
             messagebox.showinfo(
                 f"{mode_text} room started",
-                f"Student address:\n{url}\n\nSession code: {code}\n\nPassages: {len(lessons)}{prep_note}",
+                f"Students on the same Wi-Fi/LAN can open:\n{url}\n\nSession code: {code}\n\nThey enter their own name and class before joining.\n\nPassages: {len(lessons)}{prep_note}\n\nIf Windows Firewall asks, allow DictaType on Private networks.",
                 parent=self,
             )
         except Exception as exc:
@@ -2177,13 +2197,13 @@ class ClassroomPage(ttk.Frame):
                 f"Preparing audio {done}/{total} · {passage_title} · room stays responsive"
             )
             self.room_banner_var.set(
-                f"{mode_text}: {title} · Address: {self.url_var.get()} · Code: {self.code_var.get()} · Audio {done}/{total}"
+                f"{mode_text}: {title} · LAN OPEN · Address: {self.url_var.get()} · Code: {self.code_var.get()} · Audio {done}/{total}"
             )
 
         if server.audio_error:
             self.session_summary_var.set(f"Audio preparation failed: {server.audio_error}")
             self.room_banner_var.set(
-                f"{mode_text}: {title} · Address: {self.url_var.get()} · Code: {self.code_var.get()} · AUDIO ERROR"
+                f"{mode_text}: {title} · LAN OPEN · Address: {self.url_var.get()} · Code: {self.code_var.get()} · AUDIO ERROR"
             )
             if not self._room_error_shown:
                 self._room_error_shown = True
@@ -2205,7 +2225,7 @@ class ClassroomPage(ttk.Frame):
             f"{mode_text}: {title} · {len(server.lessons)} passage(s) · {audio_text} · {self.app.performance.label}"
         )
         self.room_banner_var.set(
-            f"{mode_text}: {title} · Address: {self.url_var.get()} · Code: {self.code_var.get()} · READY"
+            f"{mode_text}: {title} · LAN OPEN · Address: {self.url_var.get()} · Code: {self.code_var.get()} · READY"
         )
 
     def stop_server(self):
@@ -2213,6 +2233,7 @@ class ClassroomPage(ttk.Frame):
         self.url_var.set("Classroom is not running")
         self.code_var.set("------")
         self.session_summary_var.set("")
+        self.network_status_var.set("Network access: room not running")
         self.room_banner_var.set("Room not running · Start a Classroom or Exam to display the student address and code here.")
         while not self._room_progress_queue.empty():
             try:
@@ -2229,7 +2250,13 @@ class ClassroomPage(ttk.Frame):
         if not self.app.classroom_server.running:
             return
         mode = "Exam" if self.app.classroom_server.session_type == "exam" else "Classroom"
-        text = f"DictaType {mode}\nAddress: {self.url_var.get()}\nSession code: {self.code_var.get()}\n{self.session_summary_var.get()}"
+        addresses = self.app.classroom_server.network_urls or [self.url_var.get()]
+        address_text = "\n".join(f"Address: {item}" for item in addresses)
+        text = (
+            f"DictaType {mode}\n{address_text}\nSession code: {self.code_var.get()}\n"
+            "Students: enter your name and class, then join with the session code.\n"
+            f"{self.session_summary_var.get()}"
+        )
         self.clipboard_clear()
         self.clipboard_append(text)
 

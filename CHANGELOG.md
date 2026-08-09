@@ -15,6 +15,8 @@ Public release candidate for DictaType 1.0.
 
 ### Changed
 
+- Exam rooms now default to **Open join**, so students on the same LAN can enter their own name and class instead of needing a pre-created profile.
+- Classroom/exam networking explicitly listens on all local IPv4 adapters and displays detected student URLs to the teacher.
 - **Preview Voice now reads the complete dictation passage**, rather than only the first sentence or first 300 characters.
 - Windows packaging uses PyInstaller ONEDIR for more reliable Piper/eSpeak/ONNX loading and less startup extraction overhead on HDD-based PCs.
 - French classroom/exam speech is generated on the teacher computer and reused by student browsers.
@@ -22,6 +24,8 @@ Public release candidate for DictaType 1.0.
 
 ### Fixed
 
+- Exam mode no longer automatically switches off new-student joining when the teacher changes the session type to Exam.
+- Exam joins require both a student name and class, keeping network-submitted results identifiable.
 - Exam/classroom startup no longer freezes the teacher interface while French neural audio is generated. Exam audio is prepared on a background worker and cached to disk before students are allowed to join.
 - Classroom & Exams now has a full-page vertical scrollbar for smaller displays.
 - A compact Room Details banner stays at the top of the Classroom & Exams page and immediately shows the student address, session code, readiness state, and audio-preparation progress.

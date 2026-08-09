@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import random
 import shutil
@@ -24,6 +25,9 @@ from .tts import (
 )
 
 
+NETWORK_BIND_HOST = "0.0.0.0"
+
+
 STUDENT_PAGE = r"""<!doctype html>
 <html lang="en">
 <head>
@@ -38,7 +42,7 @@ main{width:min(900px,94vw);margin:34px auto}.card{background:var(--panel);border
 </head>
 <body><main>
 <section id="join" class="card">
-<h1>DictaType</h1><p class="status">Enter your name exactly as it should appear on the teacher's results.</p>
+<h1>DictaType</h1><p class="status">Enter your name and class exactly as they should appear on the teacher's results. For exams, both are required.</p>
 <div class="row"><div><label>Your name</label><input id="name" autocomplete="name"></div><div><label>Class</label><input id="className"></div></div>
 <label>Session code</label><input id="code" inputmode="numeric" maxlength="6">
 <div class="actions"><button class="primary" onclick="joinSession()">Join session</button></div><p id="joinError" class="warning"></p>
@@ -89,13 +93,56 @@ window.speechSynthesis.onvoiceschanged=()=>{};
 </script></body></html>"""
 
 
-def local_ip() -> str:
+def local_ipv4_addresses() -> list[str]:
+    """Return usable IPv4 addresses for students on the teacher's LAN.
+
+    DictaType listens on 0.0.0.0, so every active network adapter can accept
+    classroom connections. This helper only decides which friendly URL(s) to
+    display to the teacher. Private LAN addresses are preferred over VPN/shared
+    or public addresses, with loopback used only as a last resort.
+    """
+    candidates: list[str] = []
+
+    def add(value: str) -> None:
+        try:
+            address = ipaddress.ip_address(str(value).strip())
+        except ValueError:
+            return
+        if not isinstance(address, ipaddress.IPv4Address):
+            return
+        if address.is_unspecified or address.is_loopback or address.is_link_local:
+            return
+        value = str(address)
+        if value not in candidates:
+            candidates.append(value)
+
+    # The route Windows would normally use to reach the network is the best
+    # first candidate and does not send any application data.
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.connect(("8.8.8.8", 80))
-            return str(sock.getsockname()[0])
+            add(str(sock.getsockname()[0]))
     except Exception:
-        return "127.0.0.1"
+        pass
+
+    # Also include addresses from other active adapters. This helps machines
+    # with Ethernet + Wi-Fi or a VPN where the default-route address is not the
+    # one used by the classroom PCs.
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET, socket.SOCK_STREAM):
+            add(str(info[4][0]))
+    except Exception:
+        pass
+
+    private = [value for value in candidates if ipaddress.ip_address(value).is_private]
+    other = [value for value in candidates if value not in private]
+    # Preserve discovery order inside each group so the default-route address
+    # remains the primary URL instead of a virtual adapter with a lower number.
+    return (private + other) or ["127.0.0.1"]
+
+
+def local_ip() -> str:
+    return local_ipv4_addresses()[0]
 
 
 class ClassroomServer:
@@ -140,6 +187,13 @@ class ClassroomServer:
     @property
     def url(self) -> str:
         return f"http://{local_ip()}:{self.port}" if self.running else ""
+
+    @property
+    def network_urls(self) -> list[str]:
+        """Student URLs for all detected local IPv4 adapters."""
+        if not self.running:
+            return []
+        return [f"http://{address}:{self.port}" for address in local_ipv4_addresses()]
 
     def _lesson_sentences(self, lesson_data: dict[str, Any]) -> list[str]:
         text = str(lesson_data.get("text", ""))
@@ -437,6 +491,9 @@ class ClassroomServer:
                     if not name:
                         self._send(HTTPStatus.BAD_REQUEST, b"Student name is required.", "text/plain")
                         return
+                    if server.session_type == "exam" and not class_name:
+                        self._send(HTTPStatus.BAD_REQUEST, b"Class is required for an exam. Enter your class and try again.", "text/plain; charset=utf-8")
+                        return
                     student = server.db.find_student(name, class_name)
                     if student is None:
                         if not server.allow_new_profiles:
@@ -473,6 +530,9 @@ class ClassroomServer:
                 class_name = str(payload.get("class_name", "")).strip()
                 if not name:
                     self._send(HTTPStatus.BAD_REQUEST, b"Student name is required.", "text/plain")
+                    return
+                if server.session_type == "exam" and not class_name:
+                    self._send(HTTPStatus.BAD_REQUEST, b"Class is required for an exam. Enter your class and try again.", "text/plain; charset=utf-8")
                     return
                 student = server.db.find_student(name, class_name)
                 if student is None:
@@ -544,7 +604,7 @@ class ClassroomServer:
 
         for candidate in range(port, port + 20):
             try:
-                self.httpd = ThreadingHTTPServer(("0.0.0.0", candidate), Handler)
+                self.httpd = ThreadingHTTPServer((NETWORK_BIND_HOST, candidate), Handler)
                 self.httpd.daemon_threads = True
                 self.port = candidate
                 break

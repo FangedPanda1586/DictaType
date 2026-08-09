@@ -1,24 +1,19 @@
-DictaType RC1 - Exam room responsiveness + room details fix
+DictaType RC1 - Exam LAN open-join patch
 
-Replace/add ONLY these files in the repository:
+Upload/replace these files in the repository:
 
   dictatype/classroom.py
   dictatype/ui.py
-  tests/test_classroom_async_room_details.py
+  tests/test_exam_network_open_join.py
   CHANGELOG.md
 
-Keep your current public RC1 versions of:
+Keep the current public RC1 GitHub Actions workflow, DictaType.spec, installer.iss, and dictatype/tts.py.
 
-  .github/workflows/windows-build.yml
-  DictaType.spec
-  installer.iss
-  dictatype/tts.py
-
-What this patch changes:
-- Exam audio preparation runs in a background worker instead of blocking Tk.
-- The room address and session code appear immediately.
-- Students cannot join until exam audio is ready.
-- Classroom & Exams is vertically scrollable on smaller screens.
-- A Room Details banner at the top shows address, code, READY/preparing state and progress.
-
-After uploading, commit all four files together and start a NEW GitHub Actions build.
+Expected behaviour after rebuilding:
+- Start an Exam on the teacher PC.
+- DictaType listens on all local IPv4 network adapters.
+- PCs on the same Wi-Fi/Ethernet LAN open the displayed http://<teacher-ip>:<port> address in a browser.
+- Students enter their own name, class, and session code.
+- New student profiles are allowed by default in Exam mode.
+- Uncheck Open join only if you intentionally want a pre-registered roster.
+- If Windows Firewall prompts on the teacher PC, allow DictaType on Private networks.
