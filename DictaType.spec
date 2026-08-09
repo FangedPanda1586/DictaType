@@ -12,15 +12,13 @@ hiddenimports = collect_submodules("pyttsx3") + [
 # Piper bundles Python modules, an embedded eSpeak bridge, eSpeak language
 # data and native libraries. collect_all is deliberately used here because a
 # partial bundle can import in the build environment but fail inside the frozen
-# Windows executable. The release workflow performs a real synthesis test on
-# the finished EXE before publishing it.
+# Windows executable. The French model itself is staged beside the EXE so low-end
+# HDD machines do not re-extract a large ONNX file on every launch.
 piper_datas, piper_binaries, piper_hidden = collect_all("piper")
 onnx_datas, onnx_binaries, onnx_hidden = collect_all("onnxruntime")
 hiddenimports += piper_hidden + onnx_hidden
 
-datas = piper_datas + onnx_datas + [
-    ("assets/voices", "assets/voices"),
-]
+datas = piper_datas + onnx_datas
 binaries = piper_binaries + onnx_binaries
 
 a = Analysis(

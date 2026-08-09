@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 
@@ -18,7 +19,15 @@ def main() -> None:
         type=Path,
         help="Write French voice verification details to this JSON file",
     )
+    parser.add_argument(
+        "--voice-dir",
+        type=Path,
+        help="Override the directory containing the DictaType French voice files",
+    )
     args = parser.parse_args()
+
+    if args.voice_dir:
+        os.environ["DICTATYPE_FRENCH_VOICE_DIR"] = str(args.voice_dir.resolve())
 
     if args.verify_french_voice:
         from .tts import french_voice_diagnostics

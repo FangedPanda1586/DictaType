@@ -1,17 +1,12 @@
-DictaType French Voice + Adaptive Performance Update
-=====================================================
+DictaType French Neural Voice - External Runtime Fix
+=================================================
 
-This is a cumulative patch. You do NOT need to install the French-voice fix and
-low-end optimization separately.
-
-It combines:
-- verified built-in fr-FR Piper neural voice packaging
-- finished-EXE French synthesis verification in GitHub Actions
-- automatic low-memory/HDD optimization for 4 GB classroom PCs
-- pre-generated and disk-cached exam/classroom audio
-- neural model release before students join exams
-- exam/classroom mode, multi-passage exams and combined exam PDF reporting
-- PIN-free student profiles and student history support from the recent updates
+WHY THIS FIX
+------------
+The French ONNX model is now installed beside DictaType.exe instead of being
+embedded inside the PyInstaller one-file payload. This is more reliable and is
+also faster on 4 GB RAM / HDD classroom PCs because the ~60 MB voice model does
+not need to be extracted to a temporary directory every time DictaType starts.
 
 UPLOAD / REPLACE
 ----------------
@@ -26,6 +21,7 @@ dictatype/main.py
 requirements.txt
 pyproject.toml
 DictaType.spec
+installer.iss
 .github/workflows/windows-build.yml
 assets/voices/NOTICE.txt
 
@@ -38,50 +34,19 @@ tests/test_french_packaging.py
 
 IMPORTANT
 ---------
-Keep dictatype.ico at the repository root. DictaType.spec uses:
-  icon="dictatype.ico"
+Keep dictatype.ico at the repository root.
 
-Do not delete or reset the existing DictaType database.
+After the GitHub build, the portable ZIP must contain:
+  DictaType/DictaType.exe
+  DictaType/voices/fr_FR-siwis-medium.onnx
+  DictaType/voices/fr_FR-siwis-medium.onnx.json
 
-GITHUB BUILD CHECK
-------------------
-After uploading the files, run:
-  GitHub -> Actions -> Build Windows release -> Run workflow
+The installer places the same two voice files in:
+  <DictaType install folder>/voices/
 
-The workflow should include these steps:
-  1. Download built-in French neural voice
-  2. Build portable executable
-  3. Verify French neural voice inside built EXE
+The GitHub workflow synthesizes a real French sentence using the FINISHED EXE
+and the staged external voice directory. If that test fails, the release stops.
 
-The third step launches the FINISHED DictaType.exe and synthesizes an actual
-French WAV. If the neural model/runtime is missing, the workflow fails instead
-of publishing a broken installer.
-
-PERFORMANCE BEHAVIOUR
----------------------
-Automatic is recommended.
-
-Automatic selects Low-memory/HDD mode when the machine has:
-- 6 GB RAM or less, or
-- 2 logical CPUs or less
-
-Low-memory/HDD mode includes:
-- lazy loading of Piper/ONNX only when French audio is needed
-- pre-generation of exam/classroom audio before students join
-- WAV caching on disk instead of keeping audio in RAM
-- release of the French neural model after audio preparation
-- streaming audio to student browsers in small chunks
-- browser caching of session audio for replays
-- conservative CPU-thread hints for neural synthesis
-- reduced UI redraw/hover work
-- smaller recent-results classroom view
-- HDD-friendly SQLite settings
-
-Every Exam pre-generates audio before the exam server opens, even on faster PCs.
-
-EXPECTED SETTINGS STATUS
-------------------------
-After a successful Windows build, Teacher -> Settings & Security should show:
-  Built-in French neural voice ready
-
-and Windows/system voices are listed separately from the neural voice.
+After installation:
+Teacher -> Settings & Security -> Test French neural voice
+should audibly speak a French test sentence.

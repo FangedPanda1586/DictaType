@@ -21,7 +21,7 @@ from .db import Database, app_data_dir
 from .performance import apply_runtime_hints, resolve_performance_profile
 from .reporting import save_attempt_pdf, save_exam_pdf
 from .scoring import calculate_wpm, score_text, split_sentences
-from .tts import SpeechEngine, Voice, builtin_french_available, french_voice_diagnostics, list_voices, verbalize_punctuation
+from .tts import BUNDLED_FRENCH_VOICE_ID, SpeechEngine, Voice, builtin_french_available, french_voice_diagnostics, list_voices, verbalize_punctuation
 
 APP_TITLE = "DictaType"
 APP_VERSION = "1.0.0"
@@ -2069,7 +2069,10 @@ class SettingsPage(ttk.Frame):
         ttk.Label(voices, text="System voices", style="CardSectionTitle.TLabel").pack(anchor="w", pady=(0, 8))
         self.voice_label = ttk.Label(voices, text="", style="CardMuted.TLabel")
         self.voice_label.pack(anchor="w")
-        RoundedButton(voices, text="Refresh installed voices", style="Secondary.TButton", command=self.refresh_voices).pack(anchor="w", pady=(12, 0))
+        voice_buttons = ttk.Frame(voices, style="Card.TFrame")
+        voice_buttons.pack(anchor="w", pady=(12, 0))
+        RoundedButton(voice_buttons, text="Refresh installed voices", style="Secondary.TButton", command=self.refresh_voices).pack(side="left")
+        RoundedButton(voice_buttons, text="Test French neural voice", style="Accent.TButton", command=self.test_french_voice).pack(side="left", padx=(8, 0))
         self.refresh()
 
     def refresh(self):
@@ -2163,6 +2166,27 @@ class SettingsPage(ttk.Frame):
             messagebox.showinfo("Restore complete", "The database was restored.", parent=self)
         except Exception as exc:
             messagebox.showerror("Restore failed", str(exc), parent=self)
+
+    def test_french_voice(self):
+        diag = french_voice_diagnostics(synthesize=False)
+        if not diag.get("model_exists") or not diag.get("config_exists"):
+            searched = "\n".join(str(item) for item in diag.get("searched_voice_directories", []))
+            messagebox.showerror(
+                "French neural voice missing",
+                "DictaType could not find the French voice files.\n\nSearched locations:\n" + searched,
+                parent=self,
+            )
+            return
+
+        def on_error(exc):
+            self.after(0, lambda: messagebox.showerror("French voice test failed", str(exc), parent=self))
+
+        self.app.speech.speak(
+            "Bonjour. Ceci est un test de la voix française de DictaType.",
+            voice_id=BUNDLED_FRENCH_VOICE_ID,
+            rate=145,
+            on_error=on_error,
+        )
 
     def refresh_voices(self):
         self.app.refresh_voices()

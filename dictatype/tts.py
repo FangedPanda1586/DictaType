@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import gc
-import importlib.util
 import io
 import os
 import re
@@ -71,14 +70,55 @@ class Voice:
 
 
 def _resource_root() -> Path:
-    # PyInstaller one-file builds extract bundled data under _MEIPASS.
     if getattr(sys, "frozen", False):
         return Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
     return Path(__file__).resolve().parents[1]
 
 
+def _french_voice_directories() -> list[Path]:
+    """Return voice locations in priority order without importing Piper.
+
+    Release builds intentionally keep the large voice model beside the EXE
+    instead of inside the PyInstaller one-file payload. This avoids extracting
+    the ~60 MB model on every launch and is substantially friendlier to HDD/4 GB
+    classroom PCs.
+    """
+    candidates: list[Path] = []
+    override = os.environ.get("DICTATYPE_FRENCH_VOICE_DIR", "").strip()
+    if override:
+        candidates.append(Path(override).expanduser())
+
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).resolve().parent
+        candidates.extend([
+            exe_dir / "voices",
+            exe_dir / "assets" / "voices",
+        ])
+
+    candidates.extend([
+        _resource_root() / "voices",
+        _resource_root() / "assets" / "voices",
+        Path(__file__).resolve().parents[1] / "assets" / "voices",
+    ])
+
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for candidate in candidates:
+        key = str(candidate.resolve(strict=False)).casefold()
+        if key not in seen:
+            seen.add(key)
+            unique.append(candidate)
+    return unique
+
+
 def bundled_french_model_path() -> Path:
-    return _resource_root() / "assets" / "voices" / BUNDLED_FRENCH_MODEL
+    for directory in _french_voice_directories():
+        model = directory / BUNDLED_FRENCH_MODEL
+        if model.is_file():
+            return model
+    # Return the preferred release location for useful diagnostics.
+    directories = _french_voice_directories()
+    return directories[0] / BUNDLED_FRENCH_MODEL
 
 
 def bundled_french_config_path() -> Path:
@@ -86,18 +126,10 @@ def bundled_french_config_path() -> Path:
 
 
 def builtin_french_available() -> bool:
-    # Keep the normal startup check cheap. The build pipeline performs a full
-    # synthesis verification against the frozen EXE before artifacts are
-    # published, so this lightweight check is safe for low-memory machines.
-    try:
-        piper_present = importlib.util.find_spec("piper") is not None
-    except Exception:
-        piper_present = False
-    return (
-        piper_present
-        and bundled_french_model_path().is_file()
-        and bundled_french_config_path().is_file()
-    )
+    # Do not import Piper here. The status check runs during normal UI startup
+    # and must stay cheap on 4 GB/HDD machines. The Windows release pipeline
+    # performs a real synthesis test on the finished EXE before publishing.
+    return bundled_french_model_path().is_file() and bundled_french_config_path().is_file()
 
 
 def french_voice_diagnostics(*, synthesize: bool = False) -> dict[str, object]:
@@ -115,6 +147,7 @@ def french_voice_diagnostics(*, synthesize: bool = False) -> dict[str, object]:
         "config_path": str(config),
         "model_exists": model.is_file(),
         "config_exists": config.is_file(),
+        "searched_voice_directories": [str(item) for item in _french_voice_directories()],
         "piper_importable": False,
         "synthesis_ok": False,
         "reason": "",
