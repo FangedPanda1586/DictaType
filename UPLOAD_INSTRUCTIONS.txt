@@ -1,31 +1,24 @@
-DictaType RC1 - French local exercise + Settings scroll fix
-==========================================================
+DictaType RC1 - Exam room responsiveness + room details fix
 
 Replace/add ONLY these files in the repository:
 
-1. dictatype/ui.py
-2. tests/test_french_local_and_settings_scroll.py
-3. CHANGELOG.md
+  dictatype/classroom.py
+  dictatype/ui.py
+  tests/test_classroom_async_room_details.py
+  CHANGELOG.md
 
-Do NOT replace the current public RC1 GitHub Actions workflow, DictaType.spec,
-installer.iss, or dictatype/tts.py with older copies.
+Keep your current public RC1 versions of:
 
-After committing the three files above, start a NEW GitHub Actions run.
+  .github/workflows/windows-build.yml
+  DictaType.spec
+  installer.iss
+  dictatype/tts.py
 
-What this patch changes
------------------------
-- French local/student exercises automatically use the bundled DictaType
-  French neural voice when the model is available, even if an older lesson
-  was saved with a Windows/SAPI French voice.
-- Existing French dictations open with the bundled neural voice selected in
-  the editor, so Preview Voice and newly saved settings are consistent.
-- Settings & Security is vertically scrollable and supports the mouse wheel,
-  keeping backup, voice, About/licensing and other controls reachable on
-  smaller screens.
+What this patch changes:
+- Exam audio preparation runs in a background worker instead of blocking Tk.
+- The room address and session code appear immediately.
+- Students cannot join until exam audio is ready.
+- Classroom & Exams is vertically scrollable on smaller screens.
+- A Room Details banner at the top shows address, code, READY/preparing state and progress.
 
-Quick checks after installing the new build
--------------------------------------------
-1. Open an OLD French dictation that previously used the Windows voice.
-2. Start it from the student exercise screen. It should use DictaType French Neural.
-3. Edit that same French dictation. Voice should show DictaType French Neural.
-4. Open Settings & Security on a small window and scroll to the bottom.
+After uploading, commit all four files together and start a NEW GitHub Actions build.

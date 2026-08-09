@@ -1750,22 +1750,85 @@ class TeacherPage(ttk.Frame):
 
 class ClassroomPage(ttk.Frame):
     def __init__(self, app: "DictaTypeApp", master):
-        super().__init__(master, padding=24, style="Page.TFrame")
+        super().__init__(master, padding=0, style="Page.TFrame")
         self.app = app
         self.db = app.db
         self.lesson_ids: list[int] = []
+        self._room_progress_queue: queue.Queue[tuple[int, int, str]] = queue.Queue()
+        self._room_error_shown = False
         self._build()
 
     def _build(self):
-        ttk.Label(self, text="Local classroom & exams", style="PageTitle.TLabel").pack(anchor="w")
-        ttk.Label(
+        # The classroom page can be taller than smaller laptop displays. A full
+        # page scroller keeps the room details, controls and submissions reachable.
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+        self.classroom_canvas = tk.Canvas(
             self,
+            highlightthickness=0,
+            bd=0,
+            bg=self.app.colors["bg"],
+            takefocus=0,
+        )
+        self.classroom_scrollbar = ttk.Scrollbar(
+            self,
+            orient="vertical",
+            command=self.classroom_canvas.yview,
+        )
+        self.classroom_canvas.configure(yscrollcommand=self.classroom_scrollbar.set)
+        self.classroom_canvas.grid(row=0, column=0, sticky="nsew")
+        self.classroom_scrollbar.grid(row=0, column=1, sticky="ns")
+
+        content = ttk.Frame(self.classroom_canvas, padding=24, style="Page.TFrame")
+        self.classroom_content = content
+        self._classroom_window = self.classroom_canvas.create_window((0, 0), window=content, anchor="nw")
+
+        def sync_scrollregion(_event=None):
+            self.classroom_canvas.configure(scrollregion=self.classroom_canvas.bbox("all"))
+
+        def sync_width(event):
+            self.classroom_canvas.itemconfigure(self._classroom_window, width=max(1, event.width))
+
+        def wheel(event):
+            delta = int(getattr(event, "delta", 0))
+            if delta:
+                self.classroom_canvas.yview_scroll(-1 if delta > 0 else 1, "units")
+            return "break"
+
+        def wheel_up(_event):
+            self.classroom_canvas.yview_scroll(-1, "units")
+            return "break"
+
+        def wheel_down(_event):
+            self.classroom_canvas.yview_scroll(1, "units")
+            return "break"
+
+        self._classroom_wheel = wheel
+        self._classroom_wheel_up = wheel_up
+        self._classroom_wheel_down = wheel_down
+        content.bind("<Configure>", sync_scrollregion)
+        self.classroom_canvas.bind("<Configure>", sync_width)
+
+        ttk.Label(content, text="Local classroom & exams", style="PageTitle.TLabel").pack(anchor="w")
+        ttk.Label(
+            content,
             text="Choose Classroom for normal practice or Exam for a controlled multi-passage assessment. Students join from a browser on the same local network.",
             style="Muted.TLabel",
             wraplength=900,
-        ).pack(anchor="w", pady=(4, 16))
+        ).pack(anchor="w", pady=(4, 10))
 
-        card = Card(self)
+        self.room_banner_var = tk.StringVar(value="Room not running · Start a Classroom or Exam to display the student address and code here.")
+        room_banner = Card(content)
+        room_banner.pack(fill="x", pady=(0, 12))
+        ttk.Label(room_banner, text="ROOM DETAILS", style="CardSectionTitle.TLabel").pack(anchor="w")
+        ttk.Label(
+            room_banner,
+            textvariable=self.room_banner_var,
+            style="CardMuted.TLabel",
+            wraplength=860,
+        ).pack(anchor="w", pady=(5, 0))
+
+        card = Card(content)
         card.pack(fill="x")
         card.columnconfigure(1, weight=1)
 
@@ -1876,7 +1939,7 @@ class ClassroomPage(ttk.Frame):
         self.stop_button = RoundedButton(buttons, text="Stop", style="Danger.TButton", command=self.stop_server, state="disabled")
         self.stop_button.pack(side="left", padx=8)
 
-        session_card = Card(self)
+        session_card = Card(content)
         session_card.pack(fill="x", pady=14)
         session_card.columnconfigure(1, weight=1)
         ttk.Label(session_card, text="Student address", style="Muted.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 14), pady=5)
@@ -1890,13 +1953,13 @@ class ClassroomPage(ttk.Frame):
         self.session_summary_var = tk.StringVar(value="")
         ttk.Label(session_card, textvariable=self.session_summary_var, style="Muted.TLabel").grid(row=2, column=1, columnspan=2, sticky="w", pady=(3, 0))
 
-        recent_header = ttk.Frame(self, style="Page.TFrame")
+        recent_header = ttk.Frame(content, style="Page.TFrame")
         recent_header.pack(fill="x", pady=(10, 8))
         ttk.Label(recent_header, text="Recent classroom submissions", style="SectionTitle.TLabel").pack(side="left")
         RoundedButton(recent_header, text="View result", style="Secondary.TButton", command=self.view_submission).pack(side="right")
         RoundedButton(recent_header, text="Save full exam PDF", style="Accent.TButton", command=self.save_exam_report).pack(side="right", padx=8)
 
-        frame = ttk.Frame(self)
+        frame = ttk.Frame(content)
         frame.pack(fill="both", expand=True)
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(0, weight=1)
@@ -1913,6 +1976,15 @@ class ClassroomPage(ttk.Frame):
         scroll2 = ttk.Scrollbar(frame, command=self.tree.yview)
         scroll2.grid(row=0, column=1, sticky="ns")
         self.tree.configure(yscrollcommand=scroll2.set)
+
+        def bind_wheel_tree(widget):
+            widget.bind("<MouseWheel>", self._classroom_wheel, add="+")
+            widget.bind("<Button-4>", self._classroom_wheel_up, add="+")
+            widget.bind("<Button-5>", self._classroom_wheel_down, add="+")
+            for child in widget.winfo_children():
+                bind_wheel_tree(child)
+
+        bind_wheel_tree(content)
         self._session_type_changed()
 
     def _refresh_french_voice_status(self):
@@ -1933,9 +2005,9 @@ class ClassroomPage(ttk.Frame):
     def _refresh_performance_status(self):
         profile = self.app.performance
         policy = (
-            "Exam audio is pre-generated to disk and the neural model is released before students join."
+            "Exam audio is prepared in the background, cached to disk, and the neural model is released before students join."
             if profile.low_memory
-            else "Exam audio is pre-generated; normal classroom audio may be generated on first use."
+            else "Exam audio is prepared in the background so the room details remain responsive while neural synthesis runs."
         )
         self.performance_status_var.set(
             f"Performance: {profile.label} · {profile.hardware_summary}. {policy}"
@@ -2022,15 +2094,21 @@ class ClassroomPage(ttk.Frame):
         if not title:
             title = lessons[0].get("title", "Classroom Dictation")
 
+        # The server prepares neural audio on a worker thread. Never touch Tk from
+        # that worker; send progress through a queue and poll it from the UI thread.
+        while not self._room_progress_queue.empty():
+            try:
+                self._room_progress_queue.get_nowait()
+            except queue.Empty:
+                break
+
         def audio_progress(done: int, total: int, passage_title: str) -> None:
-            if total:
-                self.session_summary_var.set(
-                    f"Preparing audio {done}/{total} · {passage_title}"
-                )
-                self.update_idletasks()
+            self._room_progress_queue.put((done, total, passage_title))
 
         try:
+            self._room_error_shown = False
             self.start_button.configure(state="disabled")
+            self.room_banner_var.set("Starting room…")
             url, code = self.app.classroom_server.start(
                 lessons,
                 self.port_var.get(),
@@ -2047,31 +2125,100 @@ class ClassroomPage(ttk.Frame):
             self.url_var.set(url)
             self.code_var.set(code)
             mode_text = "Exam" if is_exam else "Classroom"
-            prepared = self.app.classroom_server.audio_prepared_count
-            total_audio = self.app.classroom_server.audio_prepared_total
-            audio_text = f" · audio ready {prepared}/{total_audio}" if total_audio else ""
-            self.session_summary_var.set(
-                f"{mode_text}: {title} · {len(lessons)} passage(s){audio_text} · {self.app.performance.label}"
+            self.room_banner_var.set(
+                f"{mode_text}: {title} · Address: {url} · Code: {code} · Preparing audio in background…"
+                if self.app.classroom_server.audio_preparing
+                else f"{mode_text}: {title} · Address: {url} · Code: {code} · READY"
             )
-            self.start_button.configure(state="disabled")
+            self.session_summary_var.set(
+                f"{mode_text}: {title} · {len(lessons)} passage(s) · {self.app.performance.label}"
+            )
             self.stop_button.configure(state="normal")
             self.lesson_listbox.configure(state="disabled")
             self.session_type_combo.configure(state="disabled")
+
+            # Room details are intentionally kept at the top of the scrollable page.
+            self.classroom_canvas.yview_moveto(0.0)
+            self.after(120, self._poll_room_preparation)
+
+            prep_note = (
+                "\n\nAudio is being prepared in the background. Students can open the page now; if they try to join too early, DictaType will ask them to wait and try again once the audio is ready."
+                if self.app.classroom_server.audio_preparing
+                else ""
+            )
             messagebox.showinfo(
-                f"{mode_text} started",
-                f"Students can open:\n{url}\n\nSession code: {code}\n\nPassages: {len(lessons)}",
+                f"{mode_text} room started",
+                f"Student address:\n{url}\n\nSession code: {code}\n\nPassages: {len(lessons)}{prep_note}",
                 parent=self,
             )
         except Exception as exc:
             self.start_button.configure(state="normal")
             self.session_summary_var.set("")
+            self.room_banner_var.set("Room not running")
             messagebox.showerror(f"Could not start {'exam' if is_exam else 'classroom'}", str(exc), parent=self)
+
+    def _poll_room_preparation(self):
+        server = self.app.classroom_server
+        if not server.running:
+            return
+
+        latest: tuple[int, int, str] | None = None
+        while True:
+            try:
+                latest = self._room_progress_queue.get_nowait()
+            except queue.Empty:
+                break
+
+        mode_text = "Exam" if server.session_type == "exam" else "Classroom"
+        title = server.exam_title or mode_text
+        if latest is not None:
+            done, total, passage_title = latest
+            self.session_summary_var.set(
+                f"Preparing audio {done}/{total} · {passage_title} · room stays responsive"
+            )
+            self.room_banner_var.set(
+                f"{mode_text}: {title} · Address: {self.url_var.get()} · Code: {self.code_var.get()} · Audio {done}/{total}"
+            )
+
+        if server.audio_error:
+            self.session_summary_var.set(f"Audio preparation failed: {server.audio_error}")
+            self.room_banner_var.set(
+                f"{mode_text}: {title} · Address: {self.url_var.get()} · Code: {self.code_var.get()} · AUDIO ERROR"
+            )
+            if not self._room_error_shown:
+                self._room_error_shown = True
+                messagebox.showerror(
+                    "Exam audio preparation failed",
+                    f"The room is running, but DictaType could not finish preparing its audio.\n\n{server.audio_error}",
+                    parent=self,
+                )
+            return
+
+        if server.audio_preparing:
+            self.after(180, self._poll_room_preparation)
+            return
+
+        prepared = server.audio_prepared_count
+        total = server.audio_prepared_total
+        audio_text = f"audio ready {prepared}/{total}" if total else "audio ready"
+        self.session_summary_var.set(
+            f"{mode_text}: {title} · {len(server.lessons)} passage(s) · {audio_text} · {self.app.performance.label}"
+        )
+        self.room_banner_var.set(
+            f"{mode_text}: {title} · Address: {self.url_var.get()} · Code: {self.code_var.get()} · READY"
+        )
 
     def stop_server(self):
         self.app.classroom_server.stop()
         self.url_var.set("Classroom is not running")
         self.code_var.set("------")
         self.session_summary_var.set("")
+        self.room_banner_var.set("Room not running · Start a Classroom or Exam to display the student address and code here.")
+        while not self._room_progress_queue.empty():
+            try:
+                self._room_progress_queue.get_nowait()
+            except queue.Empty:
+                break
         self.start_button.configure(state="normal")
         self.stop_button.configure(state="disabled")
         self.lesson_listbox.configure(state="normal")

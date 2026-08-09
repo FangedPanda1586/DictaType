@@ -127,6 +127,11 @@ class ClassroomServer:
         self.performance: PerformanceProfile = resolve_performance_profile("auto")
         self.audio_prepared_count = 0
         self.audio_prepared_total = 0
+        self.audio_ready = True
+        self.audio_preparing = False
+        self.audio_error = ""
+        self.audio_thread: threading.Thread | None = None
+        self._audio_stop_event = threading.Event()
 
     @property
     def running(self) -> bool:
@@ -237,12 +242,17 @@ class ClassroomServer:
         self.audio_prepared_count = 0
         try:
             for number, (item_index, sentence_index, title) in enumerate(jobs, start=1):
+                if self._audio_stop_event.is_set():
+                    break
                 if progress_callback:
                     progress_callback(number - 1, len(jobs), title)
                 if self._audio_path(item_index, sentence_index) is not None:
                     self.audio_prepared_count += 1
                 if progress_callback:
                     progress_callback(number, len(jobs), title)
+                # Yield briefly between synthesis jobs so the teacher UI remains
+                # responsive on older CPUs and HDD-based machines.
+                self._audio_stop_event.wait(0.025)
         finally:
             # The model is only needed while creating French audio. Students play
             # ordinary WAV files after this point.
@@ -287,13 +297,21 @@ class ClassroomServer:
         self._audio_file_cache.clear()
         self.audio_prepared_count = 0
         self.audio_prepared_total = 0
+        self.audio_error = ""
+        self.audio_thread = None
+        self._audio_stop_event = threading.Event()
         self._cache_dir = Path(tempfile.gettempdir()) / "DictaType" / "classroom-audio" / self.session_id
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
-        # Every exam is prepared before students enter. Low-memory classroom mode
-        # also prepares its single dictation so no neural work happens mid-lesson.
-        if self.enhanced_audio and (precache_audio or self.session_type == "exam" or self.performance.low_memory):
-            self.prepare_audio_cache(progress_callback)
+        # Exams still pre-generate their audio before students are allowed to join,
+        # but synthesis happens on a background worker. The HTTP room starts first
+        # so the teacher can immediately see/copy the address and session code.
+        should_prepare_audio = bool(
+            self.enhanced_audio
+            and (precache_audio or self.session_type == "exam" or self.performance.low_memory)
+        )
+        self.audio_ready = not should_prepare_audio
+        self.audio_preparing = should_prepare_audio
         server = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -346,6 +364,12 @@ class ClassroomServer:
                     if query.get("code", [""])[0] != server.code:
                         self._send(HTTPStatus.FORBIDDEN, b"Invalid session code.", "text/plain; charset=utf-8")
                         return
+                    if server.audio_preparing:
+                        self._send(HTTPStatus.SERVICE_UNAVAILABLE, b"Exam audio is still being prepared. Please wait a moment.", "text/plain; charset=utf-8")
+                        return
+                    if server.audio_error:
+                        self._send(HTTPStatus.SERVICE_UNAVAILABLE, f"Exam audio preparation failed: {server.audio_error}".encode("utf-8"), "text/plain; charset=utf-8")
+                        return
                     try:
                         item_index = int(query.get("item", ["0"])[0])
                         sentence_index = int(query.get("sentence", ["0"])[0])
@@ -370,6 +394,10 @@ class ClassroomServer:
                             "session_id": server.session_id,
                             "session_type": server.session_type,
                             "item_count": len(server.lessons),
+                            "audio_ready": server.audio_ready,
+                            "audio_preparing": server.audio_preparing,
+                            "audio_prepared_count": server.audio_prepared_count,
+                            "audio_prepared_total": server.audio_prepared_total,
                             "items": [server._public_item(item) for item in server.lessons],
                         },
                     )
@@ -391,6 +419,19 @@ class ClassroomServer:
                     self._send(HTTPStatus.FORBIDDEN, b"Invalid session code.", "text/plain")
                     return
                 if path == "/api/join":
+                    if server.audio_preparing:
+                        total = server.audio_prepared_total
+                        done = server.audio_prepared_count
+                        message = (
+                            f"The exam room is preparing audio ({done}/{total}). Please wait a moment and try Join again."
+                            if total
+                            else "The exam room is preparing audio. Please wait a moment and try Join again."
+                        )
+                        self._send(HTTPStatus.SERVICE_UNAVAILABLE, message.encode("utf-8"), "text/plain; charset=utf-8")
+                        return
+                    if server.audio_error:
+                        self._send(HTTPStatus.SERVICE_UNAVAILABLE, f"The teacher computer could not prepare the exam audio: {server.audio_error}".encode("utf-8"), "text/plain; charset=utf-8")
+                        return
                     name = str(payload.get("name", "")).strip()
                     class_name = str(payload.get("class_name", "")).strip()
                     if not name:
@@ -416,6 +457,7 @@ class ClassroomServer:
                             "session_id": server.session_id,
                             "session_type": server.session_type,
                             "item_count": len(server.lessons),
+                            "audio_ready": server.audio_ready,
                             "items": [server._public_item(item) for item in server.lessons],
                         },
                     )
@@ -510,11 +552,41 @@ class ClassroomServer:
                 continue
         if self.httpd is None:
             raise OSError("No available port was found for Classroom Mode.")
-        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self.thread = threading.Thread(
+            target=self.httpd.serve_forever,
+            daemon=True,
+            name="DictaTypeClassroomHTTP",
+        )
         self.thread.start()
+
+        if should_prepare_audio:
+            preparation_session_id = self.session_id
+
+            def prepare_worker() -> None:
+                try:
+                    self.prepare_audio_cache(progress_callback)
+                    if self.session_id == preparation_session_id and not self._audio_stop_event.is_set():
+                        self.audio_ready = True
+                except Exception as exc:
+                    if self.session_id == preparation_session_id:
+                        self.audio_error = str(exc)
+                        self.audio_ready = False
+                finally:
+                    if self.session_id == preparation_session_id:
+                        self.audio_preparing = False
+
+            self.audio_thread = threading.Thread(
+                target=prepare_worker,
+                daemon=True,
+                name="DictaTypeExamAudioPrep",
+            )
+            self.audio_thread.start()
+
         return self.url, self.code
 
     def stop(self) -> None:
+        # Cancel background preparation between synthesis jobs without freezing Tk.
+        self._audio_stop_event.set()
         if self.httpd is not None:
             try:
                 self.httpd.shutdown()
@@ -545,4 +617,8 @@ class ClassroomServer:
         self._cache_dir = None
         self.audio_prepared_count = 0
         self.audio_prepared_total = 0
+        self.audio_ready = True
+        self.audio_preparing = False
+        self.audio_error = ""
+        self.audio_thread = None
         release_bundled_french_voice()

@@ -22,6 +22,10 @@ Public release candidate for DictaType 1.0.
 
 ### Fixed
 
+- Exam/classroom startup no longer freezes the teacher interface while French neural audio is generated. Exam audio is prepared on a background worker and cached to disk before students are allowed to join.
+- Classroom & Exams now has a full-page vertical scrollbar for smaller displays.
+- A compact Room Details banner stays at the top of the Classroom & Exams page and immediately shows the student address, session code, readiness state, and audio-preparation progress.
+- Students who try to join an exam before background audio preparation is complete now receive a clear wait-and-retry message instead of entering a half-prepared room.
 - Local French student exercises now automatically use the bundled DictaType French neural voice when available, including older lessons that were saved with a Windows/SAPI voice.
 - Editing an existing French dictation now selects the bundled neural voice by default so Preview Voice and saved settings stay consistent.
 - Settings & Security now has vertical scrolling and mouse-wheel support so every option remains reachable on smaller displays.
