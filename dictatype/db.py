@@ -104,6 +104,8 @@ class Database:
                     name TEXT NOT NULL,
                     class_name TEXT NOT NULL DEFAULT '',
                     identifier TEXT NOT NULL DEFAULT '',
+                    pin_hash TEXT NOT NULL DEFAULT '',
+                    active INTEGER NOT NULL DEFAULT 1,
                     created_at TEXT NOT NULL
                 );
 
@@ -124,6 +126,10 @@ class Database:
                     details_json TEXT NOT NULL,
                     source TEXT NOT NULL DEFAULT 'desktop',
                     teacher_comment TEXT NOT NULL DEFAULT '',
+                    exam_session_id TEXT NOT NULL DEFAULT '',
+                    exam_title TEXT NOT NULL DEFAULT '',
+                    exam_item_index INTEGER NOT NULL DEFAULT 0,
+                    exam_item_count INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
                     FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE SET NULL,
                     FOREIGN KEY(lesson_id) REFERENCES lessons(id) ON DELETE SET NULL
@@ -134,12 +140,51 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_lessons_title ON lessons(title);
                 """
             )
+            # Migrate databases created by earlier DictaType releases.
+            student_columns = {row[1] for row in conn.execute("PRAGMA table_info(students)").fetchall()}
+            if "pin_hash" not in student_columns:
+                conn.execute("ALTER TABLE students ADD COLUMN pin_hash TEXT NOT NULL DEFAULT ''")
+            if "active" not in student_columns:
+                conn.execute("ALTER TABLE students ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
+
+            attempt_columns = {row[1] for row in conn.execute("PRAGMA table_info(attempts)").fetchall()}
+            attempt_migrations = {
+                "exam_session_id": "TEXT NOT NULL DEFAULT ''",
+                "exam_title": "TEXT NOT NULL DEFAULT ''",
+                "exam_item_index": "INTEGER NOT NULL DEFAULT 0",
+                "exam_item_count": "INTEGER NOT NULL DEFAULT 0",
+            }
+            for column, definition in attempt_migrations.items():
+                if column not in attempt_columns:
+                    conn.execute(f"ALTER TABLE attempts ADD COLUMN {column} {definition}")
+
+            # Link legacy results to a profile when name and class match exactly.
+            conn.execute(
+                """
+                UPDATE attempts
+                SET student_id = (
+                    SELECT s.id FROM students s
+                    WHERE lower(s.name) = lower(attempts.student_name)
+                      AND lower(s.class_name) = lower(attempts.class_name)
+                    ORDER BY s.id LIMIT 1
+                )
+                WHERE student_id IS NULL
+                  AND EXISTS (
+                    SELECT 1 FROM students s
+                    WHERE lower(s.name) = lower(attempts.student_name)
+                      AND lower(s.class_name) = lower(attempts.class_name)
+                  )
+                """
+            )
+
             defaults = {
-                "theme": "dark",
+                "theme": "light",
                 "teacher_pin": hash_pin("1234"),
                 "first_run": "1",
                 "default_language": "en",
                 "window_geometry": "1100x720",
+                "security_setup_complete": "0",
+                "teacher_auto_lock_minutes": "15",
             }
             for key, value in defaults.items():
                 conn.execute(
@@ -278,12 +323,80 @@ class Database:
         with self.connect() as conn:
             conn.execute("DELETE FROM lessons WHERE id = ?", (lesson_id,))
 
-    def list_students(self) -> list[dict[str, Any]]:
+    def list_students(self, active_only: bool = False) -> list[dict[str, Any]]:
         with self.connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM students ORDER BY class_name, name COLLATE NOCASE"
-            ).fetchall()
+            query = """
+                SELECT id, name, class_name, identifier, active, created_at
+                FROM students
+            """
+            if active_only:
+                query += " WHERE active = 1"
+            query += " ORDER BY class_name, name COLLATE NOCASE"
+            rows = conn.execute(query).fetchall()
             return [dict(row) for row in rows]
+
+    def get_student(self, student_id: int) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, name, class_name, identifier, active, created_at
+                FROM students WHERE id = ?
+                """,
+                (student_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_student_by_identifier(self, identifier: str) -> dict[str, Any] | None:
+        identifier = identifier.strip()
+        if not identifier:
+            return None
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, name, class_name, identifier, active, created_at
+                FROM students
+                WHERE lower(identifier) = lower(?)
+                LIMIT 1
+                """,
+                (identifier,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def find_student(self, name: str, class_name: str = "") -> dict[str, Any] | None:
+        name = name.strip()
+        class_name = class_name.strip()
+        if not name:
+            return None
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, name, class_name, identifier, active, created_at
+                FROM students
+                WHERE lower(name) = lower(?) AND lower(class_name) = lower(?)
+                ORDER BY id
+                LIMIT 1
+                """,
+                (name, class_name),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def _next_student_identifier(self, conn: sqlite3.Connection) -> str:
+        # Human-readable, non-secret profile identifier. It is not an authentication credential.
+        highest = 0
+        for row in conn.execute("SELECT identifier FROM students WHERE identifier LIKE 'ST%'").fetchall():
+            value = str(row[0] or "").upper()
+            if value.startswith("ST") and value[2:].isdigit():
+                highest = max(highest, int(value[2:]))
+        candidate = highest + 1
+        while True:
+            identifier = f"ST{candidate:04d}"
+            exists = conn.execute(
+                "SELECT 1 FROM students WHERE lower(identifier)=lower(?)",
+                (identifier,),
+            ).fetchone()
+            if not exists:
+                return identifier
+            candidate += 1
 
     def save_student(
         self,
@@ -291,19 +404,101 @@ class Database:
         class_name: str = "",
         identifier: str = "",
         student_id: int | None = None,
+        pin: str | None = None,
+        active: bool = True,
     ) -> int:
+        """Create or update a student profile.
+
+        ``pin`` is accepted for compatibility with older callers, but student
+        profiles no longer require or use a PIN. Teacher access remains protected.
+        """
+        name = name.strip()
+        class_name = class_name.strip()
+        identifier = identifier.strip()
+        if not name:
+            raise ValueError("Student name is required.")
         with self.connect() as conn:
+            if student_id is None and not identifier:
+                identifier = self._next_student_identifier(conn)
+            if identifier:
+                params: list[Any] = [identifier]
+                query = "SELECT id FROM students WHERE lower(identifier) = lower(?)"
+                if student_id is not None:
+                    query += " AND id <> ?"
+                    params.append(student_id)
+                if conn.execute(query, params).fetchone():
+                    raise ValueError("That Student ID is already in use.")
+
             if student_id is None:
                 cursor = conn.execute(
-                    "INSERT INTO students(name, class_name, identifier, created_at) VALUES (?, ?, ?, ?)",
-                    (name.strip(), class_name.strip(), identifier.strip(), utc_now()),
+                    """
+                    INSERT INTO students(name, class_name, identifier, pin_hash, active, created_at)
+                    VALUES (?, ?, ?, '', ?, ?)
+                    """,
+                    (name, class_name, identifier, int(bool(active)), utc_now()),
                 )
-                return int(cursor.lastrowid)
+                result_id = int(cursor.lastrowid)
+            else:
+                conn.execute(
+                    """
+                    UPDATE students
+                    SET name=?, class_name=?, identifier=?, pin_hash='', active=?
+                    WHERE id=?
+                    """,
+                    (name, class_name, identifier, int(bool(active)), student_id),
+                )
+                result_id = student_id
+        self._link_attempts_to_student(result_id)
+        return result_id
+
+    def _link_attempts_to_student(self, student_id: int) -> None:
+        student = self.get_student(student_id)
+        if not student:
+            return
+        with self.connect() as conn:
             conn.execute(
-                "UPDATE students SET name=?, class_name=?, identifier=? WHERE id=?",
-                (name.strip(), class_name.strip(), identifier.strip(), student_id),
+                """
+                UPDATE attempts
+                SET student_id = ?
+                WHERE student_id IS NULL
+                  AND lower(student_name) = lower(?)
+                  AND lower(class_name) = lower(?)
+                """,
+                (student_id, student.get("name", ""), student.get("class_name", "")),
             )
-            return student_id
+
+    def create_student_profile(self, name: str, class_name: str = "") -> dict[str, Any]:
+        """Create a student-managed profile without a password or PIN."""
+        name = name.strip()
+        class_name = class_name.strip()
+        if not name:
+            raise ValueError("Enter your name.")
+        existing = self.find_student(name, class_name)
+        if existing:
+            if bool(existing.get("active", 1)):
+                return existing
+            raise ValueError("A matching profile exists but has been disabled by the teacher.")
+        student_id = self.save_student(name, class_name, active=True)
+        student = self.get_student(student_id)
+        if not student:
+            raise RuntimeError("The student profile could not be created.")
+        return student
+
+    def authenticate_student(self, identifier: str, pin: str = "") -> dict[str, Any] | None:
+        """Open an active student profile.
+
+        Student profiles intentionally have no secret credential. The identifier is
+        only used to select a profile; it must not be treated as authentication.
+        """
+        student = self.get_student_by_identifier(identifier)
+        if not student or not bool(student.get("active", 1)):
+            return None
+        return student
+
+    def set_student_pin(self, student_id: int, pin: str) -> None:
+        # Compatibility shim for older extensions. Student PINs are no longer used.
+        with self.connect() as conn:
+            conn.execute("UPDATE students SET pin_hash='' WHERE id=?", (student_id,))
 
     def delete_student(self, student_id: int) -> None:
         with self.connect() as conn:
@@ -317,8 +512,9 @@ class Database:
                     student_id, student_name, class_name, lesson_id, lesson_title,
                     answer, score_word, score_char, overall_score, wpm,
                     duration_seconds, replay_count, details_json, source,
-                    teacher_comment, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    teacher_comment, exam_session_id, exam_title,
+                    exam_item_index, exam_item_count, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload.get("student_id"),
@@ -336,6 +532,10 @@ class Database:
                     json.dumps(payload.get("details", {}), ensure_ascii=False),
                     payload.get("source", "desktop"),
                     payload.get("teacher_comment", ""),
+                    payload.get("exam_session_id", ""),
+                    payload.get("exam_title", ""),
+                    int(payload.get("exam_item_index", 0)),
+                    int(payload.get("exam_item_count", 0)),
                     utc_now(),
                 ),
             )
@@ -347,6 +547,64 @@ class Database:
                 "SELECT * FROM attempts ORDER BY created_at DESC LIMIT ?", (limit,)
             ).fetchall()
             return [dict(row) for row in rows]
+
+    def list_student_attempts(
+        self,
+        student_id: int | None = None,
+        student_name: str = "",
+        limit: int = 5000,
+    ) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            if student_id is not None:
+                student = conn.execute("SELECT name, class_name FROM students WHERE id=?", (student_id,)).fetchone()
+                if student:
+                    rows = conn.execute(
+                        """
+                        SELECT * FROM attempts
+                        WHERE student_id = ?
+                           OR (
+                                student_id IS NULL
+                                AND lower(student_name) = lower(?)
+                                AND lower(class_name) = lower(?)
+                           )
+                        ORDER BY created_at DESC
+                        LIMIT ?
+                        """,
+                        (student_id, student["name"], student["class_name"], limit),
+                    ).fetchall()
+                else:
+                    rows = []
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM attempts
+                    WHERE lower(student_name) = lower(?)
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (student_name.strip(), limit),
+                ).fetchall()
+            return [dict(row) for row in rows]
+
+    def student_history_summary(
+        self,
+        student_id: int | None = None,
+        student_name: str = "",
+    ) -> dict[str, Any]:
+        attempts = self.list_student_attempts(student_id, student_name)
+        scores = [float(item.get("overall_score", 0)) for item in attempts]
+        return {
+            "attempt_count": len(attempts),
+            "average_score": (sum(scores) / len(scores)) if scores else 0.0,
+            "best_score": max(scores) if scores else 0.0,
+            "latest_at": attempts[0].get("created_at", "") if attempts else "",
+        }
+
+    def ensure_student_profile(self, name: str, class_name: str = "") -> dict[str, Any]:
+        existing = self.find_student(name, class_name)
+        if existing:
+            return existing
+        return self.create_student_profile(name, class_name)
 
     def get_attempt(self, attempt_id: int) -> dict[str, Any] | None:
         with self.connect() as conn:
