@@ -1,35 +1,34 @@
-DictaType French neural path fix
-================================
+DictaType French installer compatibility fix
+============================================
 
-Replace these files in your GitHub repository using the files from this package.
-Do NOT copy their contents from formatted chat text. Upload the actual files.
+Replace ONLY this file in your GitHub repository:
 
-1. dictatype/tts.py
-2. installer.iss
-3. .github/workflows/windows-build.yml
-4. tests/test_french_release_filename.py   (new file)
+  installer.iss
 
-The fix deliberately uses simple release filenames with no underscores:
+Do not replace the workflow for this fix.
 
-assets/voices/french.onnx
-assets/voices/french.onnx.json
-installer-output/DictaType-Setup.exe
+Why this fixes the current failure
+----------------------------------
+Your current GitHub workflow downloads Piper's original files:
+  assets/voices/fr_FR-siwis-medium.onnx
+  assets/voices/fr_FR-siwis-medium.onnx.json
 
-The Piper downloader may still download its original fr_FR-siwis-medium files,
-but the workflow immediately copies them to the simple filenames above. DictaType
-and the installer use only the simple release filenames.
+The previous installer expected the renamed files:
+  assets/voices/french.onnx
+  assets/voices/french.onnx.json
 
-After committing, run:
-GitHub -> Actions -> Build Windows release -> Run workflow
+This installer accepts EITHER naming scheme automatically. At install time it
+always writes the stable runtime names:
+  {app}/voices/french.onnx
+  {app}/voices/french.onnx.json
 
-Before Inno Setup, confirm the log has:
-- Download built-in French neural voice: success
-- Verify French neural voice inside built EXE: success
-- Verify installer French voice sources: success
+Steps
+-----
+1. Upload the installer.iss from this ZIP to the repository root, replacing the existing file.
+2. Commit the change.
+3. GitHub -> Actions -> Build Windows release -> Run workflow.
+4. Download the DictaType-Windows artifact after the build succeeds.
+5. Install DictaType-Setup.exe.
+6. Open Teacher -> Settings & Security and test the French neural voice.
 
-The Inno Setup [Files] lines should mention:
-assets\voices\french.onnx
-assets\voices\french.onnx.json
-
-The Inno output directory should be:
-installer-output
+If the build fails again, send the first error line plus the name of the failed GitHub Actions step.
