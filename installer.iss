@@ -30,9 +30,9 @@ Name: "french"; MessagesFile: "compiler:Languages\French.isl"
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
 
 [Files]
-Source: "dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
-Source: "dist\voices\french.onnx"; DestDir: "{app}\voices"; Flags: ignoreversion
-Source: "dist\voices\french.onnx.json"; DestDir: "{app}\voices"; Flags: ignoreversion
+; The complete PyInstaller one-folder bundle is installed intact. This keeps
+; Piper, eSpeak and ONNX native files in the exact layout tested by CI.
+Source: "dist\DictaType\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

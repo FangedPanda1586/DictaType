@@ -1,29 +1,21 @@
-DictaType deterministic French neural voice build fix
-=====================================================
+DictaType French neural runtime v7 (ONEDIR)
+===========================================
 
-Replace BOTH of these files in the same GitHub commit:
+Replace these files in the GitHub repository in ONE commit:
 
-1. installer.iss
-2. .github/workflows/windows-build.yml
+1. DictaType.spec
+2. installer.iss
+3. .github/workflows/windows-build.yml
+4. dictatype/tts.py
+5. tests/test_french_onedir_release.py
 
-Do not replace only one of them. They are intentionally paired.
+Then run a NEW workflow:
+Actions -> Build Windows release - French v7 onedir -> Run workflow
 
-Then:
-1. Commit the changes.
-2. Open GitHub -> Actions -> Build Windows release.
-3. Click Run workflow.
+Expected pipeline marker:
+DictaType pipeline: french-v7-onedir-native-runtime
 
-The workflow now downloads the French model AFTER PyInstaller has finished,
-directly into dist\voices. The installer uses those exact same files.
-
-Expected successful order:
-- Build portable executable
-- Download French neural voice into release folder
-- Verify French neural voice inside built EXE
-- Verify installer inputs
-- Build Windows installer
-- Verify installer was created
-
-The installer and portable ZIP both use:
-  voices\french.onnx
-  voices\french.onnx.json
+Important change:
+PyInstaller now builds an internal one-folder runtime at dist/DictaType/. The
+installer still gives users a normal DictaType installation and shortcut. The
+portable ZIP contains the same tested runtime folder.

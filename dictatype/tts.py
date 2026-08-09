@@ -52,6 +52,7 @@ except Exception:  # pragma: no cover
 
 BUNDLED_FRENCH_VOICE_ID = "dictatype:piper:fr_FR-siwis-medium"
 BUNDLED_FRENCH_MODEL = "french.onnx"
+BUNDLED_FRENCH_MODEL_ALIASES = ("french.onnx", "fr_FR-siwis-medium.onnx")
 BUNDLED_FRENCH_NAME = "DictaType French Neural"
 
 
@@ -112,10 +113,14 @@ def _french_voice_directories() -> list[Path]:
 
 
 def bundled_french_model_path() -> Path:
+    # Release builds use the short ``french.onnx`` name, but older DictaType
+    # packages and Piper's downloader use ``fr_FR-siwis-medium.onnx``.
+    # Accept both so upgrades cannot strand an otherwise valid voice model.
     for directory in _french_voice_directories():
-        model = directory / BUNDLED_FRENCH_MODEL
-        if model.is_file():
-            return model
+        for filename in BUNDLED_FRENCH_MODEL_ALIASES:
+            model = directory / filename
+            if model.is_file():
+                return model
     # Return the preferred release location for useful diagnostics.
     directories = _french_voice_directories()
     return directories[0] / BUNDLED_FRENCH_MODEL
@@ -151,6 +156,10 @@ def french_voice_diagnostics(*, synthesize: bool = False) -> dict[str, object]:
         "piper_importable": False,
         "synthesis_ok": False,
         "reason": "",
+        "frozen": bool(getattr(sys, "frozen", False)),
+        "executable": str(Path(sys.executable).resolve()),
+        "resource_root": str(_resource_root()),
+        "piper_import_error": "",
     }
     if not model.is_file():
         result["reason"] = "French neural model file is missing from the application bundle."
@@ -160,6 +169,7 @@ def french_voice_diagnostics(*, synthesize: bool = False) -> dict[str, object]:
         return result
 
     PiperVoiceClass, SynthesisConfigClass = _load_piper_api()
+    result["piper_import_error"] = _piper_import_error
     if PiperVoiceClass is None or SynthesisConfigClass is None:
         result["reason"] = (
             "Piper runtime could not be loaded"
