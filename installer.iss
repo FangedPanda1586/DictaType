@@ -3,31 +3,6 @@
 #define MyAppPublisher "DictaType contributors"
 #define MyAppExeName "DictaType.exe"
 
-; French neural voice compatibility layer.
-; Newer workflows may stage assets\voices\french.onnx, while older workflows
-; keep Piper's original fr_FR-siwis-medium filenames. Accept either source and
-; always install the stable runtime names expected by DictaType.
-#define FrenchModelSimple "assets\voices\french.onnx"
-#define FrenchConfigSimple "assets\voices\french.onnx.json"
-#define FrenchModelPiper "assets\voices\fr_FR-siwis-medium.onnx"
-#define FrenchConfigPiper "assets\voices\fr_FR-siwis-medium.onnx.json"
-
-#if FileExists(FrenchModelSimple)
-  #define FrenchModelSource FrenchModelSimple
-#elif FileExists(FrenchModelPiper)
-  #define FrenchModelSource FrenchModelPiper
-#else
-  #error French neural model is missing. Expected assets\voices\french.onnx or assets\voices\fr_FR-siwis-medium.onnx
-#endif
-
-#if FileExists(FrenchConfigSimple)
-  #define FrenchConfigSource FrenchConfigSimple
-#elif FileExists(FrenchConfigPiper)
-  #define FrenchConfigSource FrenchConfigPiper
-#else
-  #error French neural configuration is missing. Expected assets\voices\french.onnx.json or assets\voices\fr_FR-siwis-medium.onnx.json
-#endif
-
 [Setup]
 AppId={{47B47A92-10DA-4E45-81EB-9C5F746021A9}
 AppName={#MyAppName}
@@ -56,8 +31,8 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 
 [Files]
 Source: "dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#FrenchModelSource}"; DestDir: "{app}\voices"; DestName: "french.onnx"; Flags: ignoreversion
-Source: "{#FrenchConfigSource}"; DestDir: "{app}\voices"; DestName: "french.onnx.json"; Flags: ignoreversion
+Source: "dist\voices\french.onnx"; DestDir: "{app}\voices"; Flags: ignoreversion
+Source: "dist\voices\french.onnx.json"; DestDir: "{app}\voices"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

@@ -1,34 +1,29 @@
-DictaType French installer compatibility fix
-============================================
+DictaType deterministic French neural voice build fix
+=====================================================
 
-Replace ONLY this file in your GitHub repository:
+Replace BOTH of these files in the same GitHub commit:
 
-  installer.iss
+1. installer.iss
+2. .github/workflows/windows-build.yml
 
-Do not replace the workflow for this fix.
+Do not replace only one of them. They are intentionally paired.
 
-Why this fixes the current failure
-----------------------------------
-Your current GitHub workflow downloads Piper's original files:
-  assets/voices/fr_FR-siwis-medium.onnx
-  assets/voices/fr_FR-siwis-medium.onnx.json
+Then:
+1. Commit the changes.
+2. Open GitHub -> Actions -> Build Windows release.
+3. Click Run workflow.
 
-The previous installer expected the renamed files:
-  assets/voices/french.onnx
-  assets/voices/french.onnx.json
+The workflow now downloads the French model AFTER PyInstaller has finished,
+directly into dist\voices. The installer uses those exact same files.
 
-This installer accepts EITHER naming scheme automatically. At install time it
-always writes the stable runtime names:
-  {app}/voices/french.onnx
-  {app}/voices/french.onnx.json
+Expected successful order:
+- Build portable executable
+- Download French neural voice into release folder
+- Verify French neural voice inside built EXE
+- Verify installer inputs
+- Build Windows installer
+- Verify installer was created
 
-Steps
------
-1. Upload the installer.iss from this ZIP to the repository root, replacing the existing file.
-2. Commit the change.
-3. GitHub -> Actions -> Build Windows release -> Run workflow.
-4. Download the DictaType-Windows artifact after the build succeeds.
-5. Install DictaType-Setup.exe.
-6. Open Teacher -> Settings & Security and test the French neural voice.
-
-If the build fails again, send the first error line plus the name of the failed GitHub Actions step.
+The installer and portable ZIP both use:
+  voices\french.onnx
+  voices\french.onnx.json
