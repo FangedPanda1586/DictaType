@@ -1,21 +1,21 @@
-DictaType French neural runtime v7 (ONEDIR)
-===========================================
+DictaType - Python 3.12 winsound compatibility fix
+==================================================
 
-Replace these files in the GitHub repository in ONE commit:
+Problem fixed
+-------------
+The Windows build uses Python 3.12. winsound.SND_SYNC was added only in
+Python 3.14, so neural voice playback raised:
 
-1. DictaType.spec
-2. installer.iss
-3. .github/workflows/windows-build.yml
-4. dictatype/tts.py
-5. tests/test_french_onedir_release.py
+    module 'winsound' has no attribute 'SND_SYNC'
 
-Then run a NEW workflow:
-Actions -> Build Windows release - French v7 onedir -> Run workflow
+Python 3.12 already plays PlaySound synchronously by default. This patch uses
+SND_FILENAME plus SND_SYNC only when the running Python version provides it.
 
-Expected pipeline marker:
-DictaType pipeline: french-v7-onedir-native-runtime
+Replace these files in the repository
+-------------------------------------
+1. dictatype/tts.py
+2. tests/test_winsound_compatibility.py
 
-Important change:
-PyInstaller now builds an internal one-folder runtime at dist/DictaType/. The
-installer still gives users a normal DictaType installation and shortcut. The
-portable ZIP contains the same tested runtime folder.
+Do NOT replace the v7 ONEDIR workflow, DictaType.spec, or installer.iss.
+
+Then commit and start a NEW GitHub Actions run.

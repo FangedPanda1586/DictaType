@@ -50,6 +50,19 @@ except Exception:  # pragma: no cover
     winsound = None
 
 
+def _winsound_filename_sync_flags() -> int:
+    """Return PlaySound flags that work on Python 3.12 through 3.14+.
+
+    ``winsound.SND_SYNC`` was added in Python 3.14. DictaType currently
+    builds with Python 3.12, where synchronous playback is already the
+    default. Falling back to zero preserves blocking playback without
+    raising AttributeError on classroom machines.
+    """
+    if winsound is None:
+        return 0
+    return int(winsound.SND_FILENAME) | int(getattr(winsound, "SND_SYNC", 0))
+
+
 BUNDLED_FRENCH_VOICE_ID = "dictatype:piper:fr_FR-siwis-medium"
 BUNDLED_FRENCH_MODEL = "french.onnx"
 BUNDLED_FRENCH_MODEL_ALIASES = ("french.onnx", "fr_FR-siwis-medium.onnx")
@@ -616,7 +629,7 @@ class SpeechEngine:
                             "DictaType can still use an installed Windows French voice."
                         )
                     if not self._stop_event.is_set():
-                        winsound.PlaySound(temp_path, winsound.SND_FILENAME | winsound.SND_SYNC)
+                        winsound.PlaySound(temp_path, _winsound_filename_sync_flags())
                     if on_done and not self._stop_event.is_set():
                         on_done()
                     return
