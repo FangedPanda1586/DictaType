@@ -1,0 +1,21 @@
+DictaType bundled French neural voice
+=====================================
+
+The Windows build downloads and bundles the Piper voice:
+  fr_FR-siwis-medium
+
+Voice catalog/model source:
+  rhasspy/piper-voices
+  fr/fr_FR/siwis/medium
+
+Language: French (France), fr_FR
+Quality: medium, 22,050 Hz
+Dataset license: Creative Commons Attribution 4.0 (CC BY 4.0)
+
+Piper text-to-speech engine:
+  Open Home Foundation, OHF-Voice/piper1-gpl
+  License: GPL-3.0-or-later
+
+The voice model is downloaded during GitHub Actions instead of being committed
+inside this source update. The generated Windows executable contains the model
+so French speech works offline after installation.

@@ -1,19 +1,43 @@
-DictaType PDF Export Update
-===========================
+DictaType built-in French neural voice update
+=============================================
 
-Upload these files to the SAME paths in your GitHub repository:
+This update adds an offline fr-FR neural voice using Piper and the
+fr_FR-siwis-medium voice model.
 
-- dictatype/ui.py              -> replace existing file
-- dictatype/reporting.py       -> new file
-- tests/test_reporting.py      -> new file
-- requirements.txt             -> replace existing file
-- pyproject.toml               -> replace existing file
+Replace these files in your GitHub repository:
+  dictatype/tts.py
+  dictatype/classroom.py
+  dictatype/ui.py
+  requirements.txt
+  pyproject.toml
+  DictaType.spec
+  .github/workflows/windows-build.yml
 
-Then run GitHub Actions -> Build Windows release -> Run workflow.
+Add these files:
+  tests/test_french_voice.py
+  assets/voices/NOTICE.txt
 
-What changes:
-- Adds a "Save analysis as PDF" button in the Result window.
-- PDF includes student/class/dictation/date, scores, WPM, time, replays,
-  marking analysis, student answer, corrections, and teacher comment.
-- Adds ReportLab as a dependency.
-- Adds an automated PDF creation test.
+IMPORTANT
+---------
+Do NOT manually download or upload the ~63 MB voice model to GitHub.
+The updated GitHub Actions workflow downloads it automatically during the
+Windows build and PyInstaller embeds it into DictaType.exe.
+
+The DictaType.spec in this update uses:
+  icon="dictatype.ico"
+which matches the root-icon layout that previously fixed your Windows build.
+If your repository has moved the icon elsewhere since then, adjust that one
+line before running the workflow.
+
+Build:
+  GitHub -> Actions -> Build Windows release -> Run workflow
+
+Expected new workflow step:
+  Download built-in French neural voice
+
+After installation:
+  - New French dictations show "DictaType French Neural" in the Voice list.
+  - Classroom/Exam has "Use DictaType built-in French neural voice" enabled.
+  - French audio is generated locally by the teacher computer and sent as WAV.
+  - Students do not need a French Windows voice or internet connection.
+  - If neural synthesis fails, DictaType retains its Windows/browser fallback.

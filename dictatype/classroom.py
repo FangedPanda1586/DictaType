@@ -59,7 +59,7 @@ function stopAudio(){if(currentAudio){try{currentAudio.pause();currentAudio.curr
 function renderItem(autoSpeak){const lesson=currentItem();if(!lesson)return;stopAudio();sentenceIndex=0;playCounts={};startedAt=Date.now();$('answer').value='';$('exerciseStatus').textContent='';
  $('title').textContent=lesson.title;$('sessionType').textContent=exam.session_type==='exam'?'Exam':'Classroom';$('language').textContent=lesson.language==='fr'?'Français':'English';$('difficulty').textContent=lesson.difficulty;$('mode').textContent=lesson.sentence_mode?'Sentence mode':'Passage mode';
  $('examProgress').textContent=exam.session_type==='exam'?`${exam.exam_title} · Passage ${itemIndex+1} of ${exam.items.length}`:'Classroom practice';
- $('audioNote').textContent=lesson.language==='fr'&&lesson.server_audio?'French clarity audio is provided by the teacher computer.':'Press Listen when you are ready.';
+ $('audioNote').textContent=lesson.language==='fr'&&lesson.neural_french?'Built-in French neural voice · offline · consistent pronunciation.':(lesson.language==='fr'&&lesson.server_audio?'French audio is provided by the teacher computer.':'Press Listen when you are ready.');
  $('previous').style.display=lesson.sentence_mode?'inline-block':'none';$('next').style.display=lesson.sentence_mode?'inline-block':'none';$('submit').textContent=itemIndex===exam.items.length-1?(exam.session_type==='exam'?'Submit final passage':'Submit answer'):'Submit passage & continue';updateProgress();if(autoSpeak)setTimeout(speakCurrent,350);}
 function voiceForLanguage(){const lesson=currentItem();const voices=speechSynthesis.getVoices();const prefix=lesson.language==='fr'?'fr':'en';const matches=voices.filter(v=>(v.lang||'').toLowerCase().startsWith(prefix));if(!matches.length)return voices[0];
  const exact=lesson.language==='fr'?'fr-fr':'en-gb';return matches.find(v=>(v.lang||'').toLowerCase()===exact&&v.localService)||matches.find(v=>(v.lang||'').toLowerCase()===exact)||matches.find(v=>v.localService)||matches.find(v=>/microsoft|google/i.test(v.name))||matches[0];}
@@ -103,6 +103,7 @@ class ClassroomServer:
         self.allow_new_profiles = True
         self.enhanced_audio = True
         self.french_clarity = True
+        self.builtin_french = True
         self.code = ""
         self.port = 0
         self._submitted_items: set[tuple[int, int]] = set()
@@ -138,6 +139,7 @@ class ClassroomServer:
             "replay_limit": lesson_data.get("replay_limit", 3),
             "sentence_mode": bool(lesson_data.get("sentence_mode", 1)),
             "server_audio": bool(self.enhanced_audio),
+            "neural_french": bool(self.builtin_french and lesson_data.get("language") == "fr"),
             "sentences": self._lesson_sentences(lesson_data),
         }
 
@@ -161,6 +163,7 @@ class ClassroomServer:
                 rate=int(lesson.get("rate", 175)),
                 volume=float(lesson.get("volume", 1.0)),
                 clarity_mode=self.french_clarity,
+                prefer_builtin_french=self.builtin_french,
             )
             self._audio_cache[key] = audio
             return audio
@@ -174,6 +177,7 @@ class ClassroomServer:
         session_type: str = "classroom",
         enhanced_audio: bool = True,
         french_clarity: bool = True,
+        builtin_french: bool = True,
     ) -> tuple[str, str]:
         self.stop()
         self.lessons = [lessons] if isinstance(lessons, dict) else list(lessons)
@@ -191,6 +195,7 @@ class ClassroomServer:
         self.allow_new_profiles = bool(allow_new_profiles)
         self.enhanced_audio = bool(enhanced_audio)
         self.french_clarity = bool(french_clarity)
+        self.builtin_french = bool(builtin_french)
         self.code = f"{random.randint(0, 999999):06d}"
         self._submitted_items.clear()
         self._audio_cache.clear()
@@ -407,6 +412,7 @@ class ClassroomServer:
         self.allow_new_profiles = True
         self.enhanced_audio = True
         self.french_clarity = True
+        self.builtin_french = True
         self.code = ""
         self.port = 0
         self._submitted_items.clear()

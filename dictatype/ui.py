@@ -20,7 +20,7 @@ from .classroom import ClassroomServer
 from .db import Database, app_data_dir
 from .reporting import save_attempt_pdf, save_exam_pdf
 from .scoring import calculate_wpm, score_text, split_sentences
-from .tts import SpeechEngine, Voice, list_voices, verbalize_punctuation
+from .tts import SpeechEngine, Voice, builtin_french_available, list_voices, verbalize_punctuation
 
 APP_TITLE = "DictaType"
 APP_VERSION = "1.0.0"
@@ -1682,21 +1682,31 @@ class ClassroomPage(ttk.Frame):
             variable=self.enhanced_audio_var,
         ).grid(row=6, column=1, columnspan=3, sticky="w", pady=(8, 0))
 
+        self.builtin_french_var = tk.BooleanVar(value=True)
+        self.builtin_french_check = ttk.Checkbutton(
+            card,
+            text="Use DictaType built-in French neural voice (recommended)",
+            variable=self.builtin_french_var,
+        )
+        self.builtin_french_check.grid(row=7, column=1, columnspan=3, sticky="w", pady=(3, 0))
+
         self.french_clarity_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             card,
-            text="French clarity mode (slower French speech for better comprehension)",
+            text="French dictation pace (slower, clearer delivery)",
             variable=self.french_clarity_var,
-        ).grid(row=7, column=1, columnspan=3, sticky="w", pady=(3, 0))
+        ).grid(row=8, column=1, columnspan=3, sticky="w", pady=(3, 0))
+        self.french_voice_status_var = tk.StringVar()
         ttk.Label(
             card,
-            text="Enhanced audio uses the voice selected in each dictation. If it cannot be generated, the student's browser automatically falls back to its best matching voice.",
+            textvariable=self.french_voice_status_var,
             style="CardMuted.TLabel",
             wraplength=780,
-        ).grid(row=8, column=1, columnspan=3, sticky="w", pady=(2, 8))
+        ).grid(row=9, column=1, columnspan=3, sticky="w", pady=(2, 8))
+        self._refresh_french_voice_status()
 
         buttons = ttk.Frame(card, style="Card.TFrame")
-        buttons.grid(row=9, column=0, columnspan=4, sticky="ew", pady=(12, 0))
+        buttons.grid(row=10, column=0, columnspan=4, sticky="ew", pady=(12, 0))
         self.start_button = RoundedButton(buttons, text="Start classroom", style="Accent.TButton", command=self.start_server)
         self.start_button.pack(side="left")
         self.stop_button = RoundedButton(buttons, text="Stop", style="Danger.TButton", command=self.stop_server, state="disabled")
@@ -1741,6 +1751,19 @@ class ClassroomPage(ttk.Frame):
         self.tree.configure(yscrollcommand=scroll2.set)
         self._session_type_changed()
 
+    def _refresh_french_voice_status(self):
+        if builtin_french_available():
+            self.french_voice_status_var.set(
+                "Built-in fr-FR neural voice is ready. French passages are generated locally on the teacher computer and sent to every student, so pronunciation does not depend on the student's browser or Windows language pack."
+            )
+            self.builtin_french_check.configure(state="normal")
+        else:
+            self.french_voice_status_var.set(
+                "Built-in French voice files were not found. DictaType will fall back to an installed Windows/browser French voice. Rebuild using the updated GitHub workflow to include the neural voice."
+            )
+            self.builtin_french_check.configure(state="disabled")
+            self.builtin_french_var.set(False)
+
     def _session_type_changed(self):
         is_exam = self.session_type_var.get() == "Exam"
         self.lesson_listbox.configure(selectmode="extended" if is_exam else "browse")
@@ -1771,6 +1794,7 @@ class ClassroomPage(ttk.Frame):
         self.lesson_listbox.selection_clear(0, "end")
 
     def refresh(self):
+        self._refresh_french_voice_status()
         lessons = self.db.list_lessons()
         selected_ids = {self.lesson_ids[index] for index in self.lesson_listbox.curselection() if index < len(self.lesson_ids)} if self.lesson_ids else set()
         self.lesson_ids = []
@@ -1829,6 +1853,7 @@ class ClassroomPage(ttk.Frame):
                 session_type="exam" if is_exam else "classroom",
                 enhanced_audio=self.enhanced_audio_var.get(),
                 french_clarity=self.french_clarity_var.get(),
+                builtin_french=self.builtin_french_var.get(),
             )
             self.url_var.set(url)
             self.code_var.set(code)
@@ -1977,7 +2002,9 @@ class SettingsPage(ttk.Frame):
     def refresh(self):
         english = len(self.app.voices_for_language("en"))
         french = len(self.app.voices_for_language("fr"))
-        self.voice_label.configure(text=f"Detected {len(self.app.voices)} system voice(s): {english} English, {french} French or French-compatible.")
+        neural = "Built-in French neural voice ready" if builtin_french_available() else "Built-in French neural voice missing"
+        system_count = sum(1 for voice in self.app.voices if not voice.id.startswith("dictatype:piper:"))
+        self.voice_label.configure(text=f"{neural}. Detected {system_count} Windows voice(s): {english} English-compatible, {french} French-compatible including the built-in voice when available.")
 
     def save_lock_setting(self):
         value = self.lock_var.get()
@@ -2496,7 +2523,10 @@ class DictaTypeApp(tk.Tk):
                 matches.append(voice)
             elif language == "en" and any(token in haystack for token in ["en-", "en_", "english", "zira", "david", "mark", "hazel"]):
                 matches.append(voice)
-        return matches or self.voices
+        if matches:
+            return matches
+        # Never offer the dedicated French neural model for an English lesson.
+        return [voice for voice in self.voices if not voice.id.startswith("dictatype:piper:")]
 
     def refresh_voices(self):
         self.voices = list_voices()
