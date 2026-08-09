@@ -62,7 +62,14 @@ class Database:
         conn = sqlite3.connect(self.path, timeout=10)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        # WAL keeps classroom submissions responsive while the teacher UI is
+        # reading results. NORMAL synchronous mode avoids unnecessary HDD flushes
+        # while preserving SQLite's transactional guarantees in WAL mode.
         conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
+        conn.execute("PRAGMA busy_timeout = 5000")
+        # Keep SQLite's per-connection cache deliberately small for 4 GB PCs.
+        conn.execute("PRAGMA cache_size = -4096")
         try:
             yield conn
             conn.commit()

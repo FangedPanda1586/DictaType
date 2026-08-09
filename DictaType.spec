@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
+from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 # pyttsx3/SAPI imports are partly dynamic on Windows.
 hiddenimports = collect_submodules("pyttsx3") + [
@@ -9,19 +9,16 @@ hiddenimports = collect_submodules("pyttsx3") + [
     "win32com.client",
 ]
 
-# Piper includes an embedded eSpeak-NG phonemizer and ONNX Runtime. The data
-# and native libraries must be copied explicitly into a one-file build.
-piper_datas = collect_data_files("piper")
-piper_binaries = collect_dynamic_libs("piper")
-onnx_binaries = collect_dynamic_libs("onnxruntime")
-hiddenimports += [
-    "piper",
-    "piper.voice",
-    "piper.config",
-    "piper.espeakbridge",
-] + collect_submodules("onnxruntime.capi")
+# Piper bundles Python modules, an embedded eSpeak bridge, eSpeak language
+# data and native libraries. collect_all is deliberately used here because a
+# partial bundle can import in the build environment but fail inside the frozen
+# Windows executable. The release workflow performs a real synthesis test on
+# the finished EXE before publishing it.
+piper_datas, piper_binaries, piper_hidden = collect_all("piper")
+onnx_datas, onnx_binaries, onnx_hidden = collect_all("onnxruntime")
+hiddenimports += piper_hidden + onnx_hidden
 
-datas = piper_datas + [
+datas = piper_datas + onnx_datas + [
     ("assets/voices", "assets/voices"),
 ]
 binaries = piper_binaries + onnx_binaries

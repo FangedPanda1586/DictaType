@@ -1,43 +1,87 @@
-DictaType built-in French neural voice update
-=============================================
+DictaType French Voice + Adaptive Performance Update
+=====================================================
 
-This update adds an offline fr-FR neural voice using Piper and the
-fr_FR-siwis-medium voice model.
+This is a cumulative patch. You do NOT need to install the French-voice fix and
+low-end optimization separately.
 
-Replace these files in your GitHub repository:
-  dictatype/tts.py
-  dictatype/classroom.py
-  dictatype/ui.py
-  requirements.txt
-  pyproject.toml
-  DictaType.spec
-  .github/workflows/windows-build.yml
+It combines:
+- verified built-in fr-FR Piper neural voice packaging
+- finished-EXE French synthesis verification in GitHub Actions
+- automatic low-memory/HDD optimization for 4 GB classroom PCs
+- pre-generated and disk-cached exam/classroom audio
+- neural model release before students join exams
+- exam/classroom mode, multi-passage exams and combined exam PDF reporting
+- PIN-free student profiles and student history support from the recent updates
 
-Add these files:
-  tests/test_french_voice.py
-  assets/voices/NOTICE.txt
+UPLOAD / REPLACE
+----------------
+dictatype/ui.py
+dictatype/db.py
+dictatype/classroom.py
+dictatype/tts.py
+dictatype/reporting.py
+dictatype/performance.py
+dictatype/main.py
+
+requirements.txt
+pyproject.toml
+DictaType.spec
+.github/workflows/windows-build.yml
+assets/voices/NOTICE.txt
+
+tests/test_security.py
+tests/test_history_exam.py
+tests/test_exam_bundle.py
+tests/test_french_voice.py
+tests/test_performance.py
+tests/test_french_packaging.py
 
 IMPORTANT
 ---------
-Do NOT manually download or upload the ~63 MB voice model to GitHub.
-The updated GitHub Actions workflow downloads it automatically during the
-Windows build and PyInstaller embeds it into DictaType.exe.
-
-The DictaType.spec in this update uses:
+Keep dictatype.ico at the repository root. DictaType.spec uses:
   icon="dictatype.ico"
-which matches the root-icon layout that previously fixed your Windows build.
-If your repository has moved the icon elsewhere since then, adjust that one
-line before running the workflow.
 
-Build:
+Do not delete or reset the existing DictaType database.
+
+GITHUB BUILD CHECK
+------------------
+After uploading the files, run:
   GitHub -> Actions -> Build Windows release -> Run workflow
 
-Expected new workflow step:
-  Download built-in French neural voice
+The workflow should include these steps:
+  1. Download built-in French neural voice
+  2. Build portable executable
+  3. Verify French neural voice inside built EXE
 
-After installation:
-  - New French dictations show "DictaType French Neural" in the Voice list.
-  - Classroom/Exam has "Use DictaType built-in French neural voice" enabled.
-  - French audio is generated locally by the teacher computer and sent as WAV.
-  - Students do not need a French Windows voice or internet connection.
-  - If neural synthesis fails, DictaType retains its Windows/browser fallback.
+The third step launches the FINISHED DictaType.exe and synthesizes an actual
+French WAV. If the neural model/runtime is missing, the workflow fails instead
+of publishing a broken installer.
+
+PERFORMANCE BEHAVIOUR
+---------------------
+Automatic is recommended.
+
+Automatic selects Low-memory/HDD mode when the machine has:
+- 6 GB RAM or less, or
+- 2 logical CPUs or less
+
+Low-memory/HDD mode includes:
+- lazy loading of Piper/ONNX only when French audio is needed
+- pre-generation of exam/classroom audio before students join
+- WAV caching on disk instead of keeping audio in RAM
+- release of the French neural model after audio preparation
+- streaming audio to student browsers in small chunks
+- browser caching of session audio for replays
+- conservative CPU-thread hints for neural synthesis
+- reduced UI redraw/hover work
+- smaller recent-results classroom view
+- HDD-friendly SQLite settings
+
+Every Exam pre-generates audio before the exam server opens, even on faster PCs.
+
+EXPECTED SETTINGS STATUS
+------------------------
+After a successful Windows build, Teacher -> Settings & Security should show:
+  Built-in French neural voice ready
+
+and Windows/system voices are listed separately from the neural voice.

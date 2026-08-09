@@ -2,17 +2,26 @@ from __future__ import annotations
 
 import json
 import random
+import shutil
 import socket
+import tempfile
 import threading
 import uuid
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
 from .db import Database
 from .scoring import calculate_wpm, score_text, split_sentences
-from .tts import render_speech_wav_bytes, verbalize_punctuation
+from .performance import PerformanceProfile, resolve_performance_profile
+from .tts import (
+    release_bundled_french_voice,
+    render_speech_wav_bytes,
+    render_speech_wav_file,
+    verbalize_punctuation,
+)
 
 
 STUDENT_PAGE = r"""<!doctype html>
@@ -63,7 +72,7 @@ function renderItem(autoSpeak){const lesson=currentItem();if(!lesson)return;stop
  $('previous').style.display=lesson.sentence_mode?'inline-block':'none';$('next').style.display=lesson.sentence_mode?'inline-block':'none';$('submit').textContent=itemIndex===exam.items.length-1?(exam.session_type==='exam'?'Submit final passage':'Submit answer'):'Submit passage & continue';updateProgress();if(autoSpeak)setTimeout(speakCurrent,350);}
 function voiceForLanguage(){const lesson=currentItem();const voices=speechSynthesis.getVoices();const prefix=lesson.language==='fr'?'fr':'en';const matches=voices.filter(v=>(v.lang||'').toLowerCase().startsWith(prefix));if(!matches.length)return voices[0];
  const exact=lesson.language==='fr'?'fr-fr':'en-gb';return matches.find(v=>(v.lang||'').toLowerCase()===exact&&v.localService)||matches.find(v=>(v.lang||'').toLowerCase()===exact)||matches.find(v=>v.localService)||matches.find(v=>/microsoft|google/i.test(v.name))||matches[0];}
-async function tryServerAudio(){const lesson=currentItem();if(!lesson||!lesson.server_audio)return false;const url=`/api/audio?code=${encodeURIComponent(sessionCode)}&item=${itemIndex}&sentence=${sentenceIndex}`;const audio=new Audio(url);audio.preload='auto';try{await audio.play();currentAudio=audio;return true;}catch(_error){return false;}}
+async function tryServerAudio(){const lesson=currentItem();if(!lesson||!lesson.server_audio)return false;const url=`/api/audio?code=${encodeURIComponent(sessionCode)}&session=${encodeURIComponent(exam.session_id||'')}&item=${itemIndex}&sentence=${sentenceIndex}`;const audio=new Audio(url);audio.preload='auto';try{await audio.play();currentAudio=audio;return true;}catch(_error){return false;}}
 async function speakCurrent(){const lesson=currentItem();if(!lesson)return;const count=playCounts[sentenceIndex]||0;if(lesson.replay_limit>0&&count>=lesson.replay_limit+1){$('exerciseStatus').textContent=lesson.sentence_mode?'The replay limit for this sentence has been reached.':'The replay limit for this passage has been reached.';return;}
  stopAudio();let played=await tryServerAudio();if(!played){try{const utterance=new SpeechSynthesisUtterance(lesson.sentences[sentenceIndex]);utterance.lang=lesson.language==='fr'?'fr-FR':'en-GB';utterance.volume=1.0;utterance.rate=lesson.language==='fr'?Math.max(.62,Math.min(1.05,lesson.rate/205)):Math.max(.55,Math.min(1.45,lesson.rate/175));const voice=voiceForLanguage();if(voice)utterance.voice=voice;speechSynthesis.speak(utterance);played=true;$('audioNote').textContent=lesson.language==='fr'?'Using this device\'s best available French voice as a fallback.':'Using this device\'s speech voice.';}catch(_error){played=false;}}
  if(played){playCounts[sentenceIndex]=count+1;updateProgress();}else{$('exerciseStatus').textContent='Audio could not be played. Tell the teacher so they can check the installed language voice.';}}
@@ -109,7 +118,15 @@ class ClassroomServer:
         self._submitted_items: set[tuple[int, int]] = set()
         self._submission_lock = threading.Lock()
         self._audio_lock = threading.Lock()
+        # _audio_cache is kept for backwards compatibility with local callers,
+        # but the classroom HTTP path uses files so multiple students never hold
+        # duplicate WAV data in RAM.
         self._audio_cache: dict[tuple[int, int], bytes | None] = {}
+        self._audio_file_cache: dict[tuple[int, int], Path | None] = {}
+        self._cache_dir: Path | None = None
+        self.performance: PerformanceProfile = resolve_performance_profile("auto")
+        self.audio_prepared_count = 0
+        self.audio_prepared_total = 0
 
     @property
     def running(self) -> bool:
@@ -168,6 +185,70 @@ class ClassroomServer:
             self._audio_cache[key] = audio
             return audio
 
+    def _audio_path(self, item_index: int, sentence_index: int) -> Path | None:
+        """Return a cached WAV path, generating it only once when necessary."""
+        if not self.enhanced_audio:
+            return None
+        key = (item_index, sentence_index)
+        with self._audio_lock:
+            if key in self._audio_file_cache:
+                return self._audio_file_cache[key]
+            if item_index < 0 or item_index >= len(self.lessons):
+                return None
+            lesson = self.lessons[item_index]
+            sentences = self._lesson_sentences(lesson)
+            if sentence_index < 0 or sentence_index >= len(sentences):
+                return None
+            if self._cache_dir is None:
+                base = Path(tempfile.gettempdir()) / "DictaType" / "classroom-audio"
+                self._cache_dir = base / (self.session_id or uuid.uuid4().hex)
+            self._cache_dir.mkdir(parents=True, exist_ok=True)
+            path = self._cache_dir / f"item_{item_index + 1:03d}_part_{sentence_index + 1:03d}.wav"
+            ok = render_speech_wav_file(
+                sentences[sentence_index],
+                path,
+                language=str(lesson.get("language", "en")),
+                voice_id=str(lesson.get("voice_id", "")),
+                rate=int(lesson.get("rate", 175)),
+                volume=float(lesson.get("volume", 1.0)),
+                clarity_mode=self.french_clarity,
+                prefer_builtin_french=self.builtin_french,
+            )
+            result = path if ok else None
+            self._audio_file_cache[key] = result
+            return result
+
+    def prepare_audio_cache(
+        self,
+        progress_callback: Callable[[int, int, str], None] | None = None,
+    ) -> tuple[int, int]:
+        """Pre-generate classroom/exam audio before students join.
+
+        Audio lives on disk, not in Python byte arrays. After preparation the
+        neural French model is released so a 4 GB teacher PC gets its RAM back.
+        """
+        jobs: list[tuple[int, int, str]] = []
+        if self.enhanced_audio:
+            for item_index, lesson in enumerate(self.lessons):
+                for sentence_index, _text in enumerate(self._lesson_sentences(lesson)):
+                    jobs.append((item_index, sentence_index, str(lesson.get("title", "Dictation"))))
+
+        self.audio_prepared_total = len(jobs)
+        self.audio_prepared_count = 0
+        try:
+            for number, (item_index, sentence_index, title) in enumerate(jobs, start=1):
+                if progress_callback:
+                    progress_callback(number - 1, len(jobs), title)
+                if self._audio_path(item_index, sentence_index) is not None:
+                    self.audio_prepared_count += 1
+                if progress_callback:
+                    progress_callback(number, len(jobs), title)
+        finally:
+            # The model is only needed while creating French audio. Students play
+            # ordinary WAV files after this point.
+            release_bundled_french_voice()
+        return self.audio_prepared_count, self.audio_prepared_total
+
     def start(
         self,
         lessons: dict[str, Any] | list[dict[str, Any]],
@@ -178,6 +259,9 @@ class ClassroomServer:
         enhanced_audio: bool = True,
         french_clarity: bool = True,
         builtin_french: bool = True,
+        performance_mode: str = "auto",
+        precache_audio: bool = False,
+        progress_callback: Callable[[int, int, str], None] | None = None,
     ) -> tuple[str, str]:
         self.stop()
         self.lessons = [lessons] if isinstance(lessons, dict) else list(lessons)
@@ -196,9 +280,20 @@ class ClassroomServer:
         self.enhanced_audio = bool(enhanced_audio)
         self.french_clarity = bool(french_clarity)
         self.builtin_french = bool(builtin_french)
+        self.performance = resolve_performance_profile(performance_mode)
         self.code = f"{random.randint(0, 999999):06d}"
         self._submitted_items.clear()
         self._audio_cache.clear()
+        self._audio_file_cache.clear()
+        self.audio_prepared_count = 0
+        self.audio_prepared_total = 0
+        self._cache_dir = Path(tempfile.gettempdir()) / "DictaType" / "classroom-audio" / self.session_id
+        self._cache_dir.mkdir(parents=True, exist_ok=True)
+
+        # Every exam is prepared before students enter. Low-memory classroom mode
+        # also prepares its single dictation so no neural work happens mid-lesson.
+        if self.enhanced_audio and (precache_audio or self.session_type == "exam" or self.performance.low_memory):
+            self.prepare_audio_cache(progress_callback)
         server = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -216,6 +311,27 @@ class ClassroomServer:
                 self.send_header("Referrer-Policy", "no-referrer")
                 self.end_headers()
                 self.wfile.write(body)
+
+            def _send_audio_file(self, path: Path) -> None:
+                try:
+                    size = path.stat().st_size
+                    self.send_response(HTTPStatus.OK)
+                    self.send_header("Content-Type", "audio/wav")
+                    self.send_header("Content-Length", str(size))
+                    # Session URLs contain a one-time code, so browser caching is
+                    # safe and avoids rereading the HDD for every replay.
+                    self.send_header("Cache-Control", "private, max-age=3600, immutable")
+                    self.send_header("X-Content-Type-Options", "nosniff")
+                    self.send_header("Referrer-Policy", "no-referrer")
+                    self.end_headers()
+                    with path.open("rb") as handle:
+                        while True:
+                            chunk = handle.read(server.performance.audio_chunk_bytes)
+                            if not chunk:
+                                break
+                            self.wfile.write(chunk)
+                except (BrokenPipeError, ConnectionResetError):
+                    return
 
             def _json(self, status: int, payload: dict[str, Any]) -> None:
                 self._send(status, json.dumps(payload, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
@@ -236,11 +352,11 @@ class ClassroomServer:
                     except Exception:
                         self._send(HTTPStatus.BAD_REQUEST, b"Invalid audio request.", "text/plain; charset=utf-8")
                         return
-                    audio = server._audio_bytes(item_index, sentence_index)
-                    if not audio:
+                    audio_path = server._audio_path(item_index, sentence_index)
+                    if audio_path is None:
                         self._send(HTTPStatus.NOT_FOUND, b"Server audio unavailable.", "text/plain; charset=utf-8")
                         return
-                    self._send(HTTPStatus.OK, audio, "audio/wav")
+                    self._send_audio_file(audio_path)
                     return
                 if parsed.path == "/api/session":
                     query = parse_qs(parsed.query)
@@ -251,6 +367,7 @@ class ClassroomServer:
                         HTTPStatus.OK,
                         {
                             "exam_title": server.exam_title,
+                            "session_id": server.session_id,
                             "session_type": server.session_type,
                             "item_count": len(server.lessons),
                             "items": [server._public_item(item) for item in server.lessons],
@@ -296,6 +413,7 @@ class ClassroomServer:
                         HTTPStatus.OK,
                         {
                             "exam_title": server.exam_title,
+                            "session_id": server.session_id,
                             "session_type": server.session_type,
                             "item_count": len(server.lessons),
                             "items": [server._public_item(item) for item in server.lessons],
@@ -385,6 +503,7 @@ class ClassroomServer:
         for candidate in range(port, port + 20):
             try:
                 self.httpd = ThreadingHTTPServer(("0.0.0.0", candidate), Handler)
+                self.httpd.daemon_threads = True
                 self.port = candidate
                 break
             except OSError:
@@ -417,3 +536,13 @@ class ClassroomServer:
         self.port = 0
         self._submitted_items.clear()
         self._audio_cache.clear()
+        self._audio_file_cache.clear()
+        if self._cache_dir is not None:
+            try:
+                shutil.rmtree(self._cache_dir, ignore_errors=True)
+            except Exception:
+                pass
+        self._cache_dir = None
+        self.audio_prepared_count = 0
+        self.audio_prepared_total = 0
+        release_bundled_french_voice()

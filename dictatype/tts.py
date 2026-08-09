@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import gc
+import importlib.util
 import io
 import os
 import re
@@ -16,11 +18,32 @@ try:
 except Exception:  # pragma: no cover
     pyttsx3 = None
 
-try:
-    from piper import PiperVoice, SynthesisConfig
-except Exception:  # pragma: no cover
-    PiperVoice = None
-    SynthesisConfig = None
+# Piper/ONNX is intentionally imported lazily. On a 4 GB/HDD classroom PC,
+# loading the neural stack during normal application startup wastes memory and
+# makes the first window appear much more slowly. The module is loaded only
+# when French neural audio is actually generated.
+_PiperVoice = None
+_SynthesisConfig = None
+_piper_import_attempted = False
+_piper_import_error = ""
+
+
+def _load_piper_api():
+    global _PiperVoice, _SynthesisConfig, _piper_import_attempted, _piper_import_error
+    if _piper_import_attempted:
+        return _PiperVoice, _SynthesisConfig
+    _piper_import_attempted = True
+    try:
+        from piper import PiperVoice as PiperVoiceClass, SynthesisConfig as SynthesisConfigClass
+
+        _PiperVoice = PiperVoiceClass
+        _SynthesisConfig = SynthesisConfigClass
+        _piper_import_error = ""
+    except Exception as exc:
+        _PiperVoice = None
+        _SynthesisConfig = None
+        _piper_import_error = f"{type(exc).__name__}: {exc}"
+    return _PiperVoice, _SynthesisConfig
 
 try:  # Windows-only playback for the bundled neural voice.
     import winsound
@@ -63,12 +86,87 @@ def bundled_french_config_path() -> Path:
 
 
 def builtin_french_available() -> bool:
+    # Keep the normal startup check cheap. The build pipeline performs a full
+    # synthesis verification against the frozen EXE before artifacts are
+    # published, so this lightweight check is safe for low-memory machines.
+    try:
+        piper_present = importlib.util.find_spec("piper") is not None
+    except Exception:
+        piper_present = False
     return (
-        PiperVoice is not None
-        and SynthesisConfig is not None
+        piper_present
         and bundled_french_model_path().is_file()
         and bundled_french_config_path().is_file()
     )
+
+
+def french_voice_diagnostics(*, synthesize: bool = False) -> dict[str, object]:
+    """Return precise built-in French voice diagnostics.
+
+    When *synthesize* is True this imports Piper, loads the bundled model and
+    creates a short WAV. GitHub Actions uses this against the finished EXE so
+    a release cannot silently ship without a working neural French voice.
+    """
+    model = bundled_french_model_path()
+    config = bundled_french_config_path()
+    result: dict[str, object] = {
+        "ready": False,
+        "model_path": str(model),
+        "config_path": str(config),
+        "model_exists": model.is_file(),
+        "config_exists": config.is_file(),
+        "piper_importable": False,
+        "synthesis_ok": False,
+        "reason": "",
+    }
+    if not model.is_file():
+        result["reason"] = "French neural model file is missing from the application bundle."
+        return result
+    if not config.is_file():
+        result["reason"] = "French neural model configuration is missing from the application bundle."
+        return result
+
+    PiperVoiceClass, SynthesisConfigClass = _load_piper_api()
+    if PiperVoiceClass is None or SynthesisConfigClass is None:
+        result["reason"] = (
+            "Piper runtime could not be loaded"
+            + (f" ({_piper_import_error})" if _piper_import_error else ".")
+        )
+        return result
+    result["piper_importable"] = True
+
+    if synthesize:
+        try:
+            fd, temp_name = tempfile.mkstemp(prefix="dictatype_fr_verify_", suffix=".wav")
+            os.close(fd)
+            Path(temp_name).unlink(missing_ok=True)
+            ok = render_speech_wav_file(
+                "Bonjour, ceci est un test de la voix française de DictaType.",
+                temp_name,
+                language="fr",
+                voice_id=BUNDLED_FRENCH_VOICE_ID,
+                rate=145,
+                clarity_mode=True,
+                prefer_builtin_french=True,
+            )
+            result["synthesis_ok"] = bool(ok)
+            try:
+                Path(temp_name).unlink(missing_ok=True)
+            except Exception:
+                pass
+            release_bundled_french_voice()
+            if not ok:
+                result["reason"] = "Piper loaded, but the bundled French model could not synthesize WAV audio."
+                return result
+        except Exception as exc:
+            result["reason"] = f"French neural synthesis failed ({type(exc).__name__}: {exc})"
+            return result
+    else:
+        result["synthesis_ok"] = True
+
+    result["ready"] = True
+    result["reason"] = "Built-in French neural voice is ready."
+    return result
 
 
 def builtin_french_voice() -> Voice:
@@ -170,11 +268,25 @@ def _get_piper_french_voice():
     global _piper_voice
     if not builtin_french_available():
         return None
+    PiperVoiceClass, _ = _load_piper_api()
+    if PiperVoiceClass is None:
+        return None
     with _piper_lock:
         if _piper_voice is None:
             # Piper automatically looks for <model>.onnx.json beside the model.
-            _piper_voice = PiperVoice.load(str(bundled_french_model_path()))
+            _piper_voice = PiperVoiceClass.load(str(bundled_french_model_path()))
         return _piper_voice
+
+
+def release_bundled_french_voice() -> None:
+    """Release the loaded neural session after exam audio has been prepared."""
+    global _piper_voice
+    with _piper_lock:
+        _piper_voice = None
+    # ONNX owns native buffers that can be sizeable compared with a 4 GB PC.
+    # A collection here is intentional because this runs at an explicit audio
+    # preparation boundary, not continuously during typing.
+    gc.collect()
 
 
 def _piper_length_scale(rate: int, clarity_mode: bool) -> float:
@@ -197,10 +309,11 @@ def _render_piper_french_wav_bytes(
     if not str(text).strip():
         return None
     voice = _get_piper_french_voice()
-    if voice is None or SynthesisConfig is None:
+    _, SynthesisConfigClass = _load_piper_api()
+    if voice is None or SynthesisConfigClass is None:
         return None
     try:
-        syn_config = SynthesisConfig(
+        syn_config = SynthesisConfigClass(
             volume=max(0.0, min(1.5, float(volume))),
             length_scale=_piper_length_scale(rate, clarity_mode),
             noise_scale=0.667,
@@ -220,6 +333,109 @@ def _render_piper_french_wav_bytes(
     except Exception:
         return None
     return None
+
+
+def render_speech_wav_file(
+    text: str,
+    output_path: str | Path,
+    *,
+    language: str = "en",
+    voice_id: str = "",
+    rate: int = 175,
+    volume: float = 1.0,
+    clarity_mode: bool = False,
+    prefer_builtin_french: bool = False,
+) -> bool:
+    """Render directly to a WAV file without retaining the whole file in RAM."""
+    text = str(text)
+    if not text.strip():
+        return False
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    if language == "fr" and (voice_id == BUNDLED_FRENCH_VOICE_ID or prefer_builtin_french):
+        voice = _get_piper_french_voice()
+        _, SynthesisConfigClass = _load_piper_api()
+        if voice is not None and SynthesisConfigClass is not None:
+            try:
+                syn_config = SynthesisConfigClass(
+                    volume=max(0.0, min(1.5, float(volume))),
+                    length_scale=_piper_length_scale(rate, clarity_mode),
+                    noise_scale=0.667,
+                    noise_w_scale=0.8,
+                    normalize_audio=True,
+                )
+                with _piper_lock:
+                    with wave.open(str(path), "wb") as wav_file:
+                        voice.synthesize_wav(text, wav_file, syn_config=syn_config)
+                if _valid_wav_file(path):
+                    return True
+            except Exception:
+                try:
+                    path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+    if pyttsx3 is None:
+        return False
+
+    effective_rate = int(rate)
+    if clarity_mode and language == "fr":
+        effective_rate = min(effective_rate, 150)
+    engine = None
+    try:
+        # pyttsx3/SAPI can write directly to the target file too.
+        try:
+            path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        engine = pyttsx3.init()
+        chosen_id = str(voice_id or "").strip()
+        if chosen_id == BUNDLED_FRENCH_VOICE_ID:
+            chosen_id = ""
+        voices = engine.getProperty("voices") or []
+        if chosen_id:
+            try:
+                engine.setProperty("voice", chosen_id)
+            except Exception:
+                chosen_id = ""
+        if not chosen_id:
+            for raw_voice in voices:
+                if _voice_matches_language(raw_voice, language):
+                    candidate = str(getattr(raw_voice, "id", ""))
+                    if candidate:
+                        engine.setProperty("voice", candidate)
+                        break
+        engine.setProperty("rate", effective_rate)
+        engine.setProperty("volume", max(0.0, min(1.0, float(volume))))
+        engine.save_to_file(text, str(path))
+        engine.runAndWait()
+        engine.stop()
+        engine = None
+        return _valid_wav_file(path)
+    except Exception:
+        try:
+            path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return False
+    finally:
+        try:
+            if engine is not None:
+                engine.stop()
+        except Exception:
+            pass
+
+
+def _valid_wav_file(path: Path) -> bool:
+    try:
+        if path.stat().st_size <= 44:
+            return False
+        with path.open("rb") as handle:
+            header = handle.read(12)
+        return header[:4] == b"RIFF" and header[8:12] == b"WAVE"
+    except Exception:
+        return False
 
 
 def render_speech_wav_bytes(
@@ -340,22 +556,22 @@ class SpeechEngine:
             temp_path = ""
             try:
                 if voice_id == BUNDLED_FRENCH_VOICE_ID:
-                    audio = _render_piper_french_wav_bytes(
-                        text,
-                        rate=rate,
-                        volume=volume,
-                        clarity_mode=False,
-                    )
-                    if not audio:
-                        raise RuntimeError(
-                            "The built-in French neural voice could not generate audio. "
-                            "DictaType can still use an installed Windows French voice."
-                        )
                     if winsound is None:
                         raise RuntimeError("Built-in neural voice playback is available in the Windows build.")
                     fd, temp_path = tempfile.mkstemp(prefix="dictatype_french_", suffix=".wav")
                     os.close(fd)
-                    Path(temp_path).write_bytes(audio)
+                    if not render_speech_wav_file(
+                        text,
+                        temp_path,
+                        language="fr",
+                        voice_id=BUNDLED_FRENCH_VOICE_ID,
+                        rate=rate,
+                        volume=volume,
+                    ):
+                        raise RuntimeError(
+                            "The built-in French neural voice could not generate audio. "
+                            "DictaType can still use an installed Windows French voice."
+                        )
                     if not self._stop_event.is_set():
                         winsound.PlaySound(temp_path, winsound.SND_FILENAME | winsound.SND_SYNC)
                     if on_done and not self._stop_event.is_set():

@@ -18,9 +18,10 @@ from typing import Any, Callable
 
 from .classroom import ClassroomServer
 from .db import Database, app_data_dir
+from .performance import apply_runtime_hints, resolve_performance_profile
 from .reporting import save_attempt_pdf, save_exam_pdf
 from .scoring import calculate_wpm, score_text, split_sentences
-from .tts import SpeechEngine, Voice, builtin_french_available, list_voices, verbalize_punctuation
+from .tts import SpeechEngine, Voice, builtin_french_available, french_voice_diagnostics, list_voices, verbalize_punctuation
 
 APP_TITLE = "DictaType"
 APP_VERSION = "1.0.0"
@@ -200,10 +201,16 @@ class RoundedButton(tk.Canvas):
 
     def _enter(self, _event=None):
         if self._state != "disabled":
+            # Low-memory mode avoids unnecessary canvas redraws on older Intel
+            # HD graphics while keeping the same rounded visual design.
+            if getattr(getattr(self._app, "performance", None), "low_memory", False):
+                return
             self._hover = True
             self._draw()
 
     def _leave(self, _event=None):
+        if getattr(getattr(self._app, "performance", None), "low_memory", False):
+            return
         self._hover = False
         self._draw()
 
@@ -1705,8 +1712,17 @@ class ClassroomPage(ttk.Frame):
         ).grid(row=9, column=1, columnspan=3, sticky="w", pady=(2, 8))
         self._refresh_french_voice_status()
 
+        self.performance_status_var = tk.StringVar()
+        ttk.Label(
+            card,
+            textvariable=self.performance_status_var,
+            style="CardMuted.TLabel",
+            wraplength=780,
+        ).grid(row=10, column=1, columnspan=3, sticky="w", pady=(3, 5))
+        self._refresh_performance_status()
+
         buttons = ttk.Frame(card, style="Card.TFrame")
-        buttons.grid(row=10, column=0, columnspan=4, sticky="ew", pady=(12, 0))
+        buttons.grid(row=11, column=0, columnspan=4, sticky="ew", pady=(12, 0))
         self.start_button = RoundedButton(buttons, text="Start classroom", style="Accent.TButton", command=self.start_server)
         self.start_button.pack(side="left")
         self.stop_button = RoundedButton(buttons, text="Stop", style="Danger.TButton", command=self.stop_server, state="disabled")
@@ -1758,11 +1774,24 @@ class ClassroomPage(ttk.Frame):
             )
             self.builtin_french_check.configure(state="normal")
         else:
+            diag = french_voice_diagnostics(synthesize=False)
+            reason = str(diag.get("reason") or "Built-in French neural voice is unavailable.")
             self.french_voice_status_var.set(
-                "Built-in French voice files were not found. DictaType will fall back to an installed Windows/browser French voice. Rebuild using the updated GitHub workflow to include the neural voice."
+                f"{reason} DictaType will use an installed Windows/browser French voice as a fallback."
             )
             self.builtin_french_check.configure(state="disabled")
             self.builtin_french_var.set(False)
+
+    def _refresh_performance_status(self):
+        profile = self.app.performance
+        policy = (
+            "Exam audio is pre-generated to disk and the neural model is released before students join."
+            if profile.low_memory
+            else "Exam audio is pre-generated; normal classroom audio may be generated on first use."
+        )
+        self.performance_status_var.set(
+            f"Performance: {profile.label} · {profile.hardware_summary}. {policy}"
+        )
 
     def _session_type_changed(self):
         is_exam = self.session_type_var.get() == "Exam"
@@ -1811,7 +1840,8 @@ class ClassroomPage(ttk.Frame):
         self._session_type_changed()
 
         self.tree.delete(*self.tree.get_children())
-        for attempt in [item for item in self.db.list_attempts(500) if str(item.get("source", "")).startswith("classroom")]:
+        limit = self.app.performance.classroom_result_limit
+        for attempt in [item for item in self.db.list_attempts(limit) if str(item.get("source", "")).startswith("classroom")]:
             is_exam = str(attempt.get("source", "")).startswith("classroom-exam")
             exam = attempt.get("exam_title", "") or ("Exam" if is_exam else "Classroom")
             if is_exam and attempt.get("exam_item_count", 0) > 1:
@@ -1844,7 +1874,15 @@ class ClassroomPage(ttk.Frame):
         if not title:
             title = lessons[0].get("title", "Classroom Dictation")
 
+        def audio_progress(done: int, total: int, passage_title: str) -> None:
+            if total:
+                self.session_summary_var.set(
+                    f"Preparing audio {done}/{total} · {passage_title}"
+                )
+                self.update_idletasks()
+
         try:
+            self.start_button.configure(state="disabled")
             url, code = self.app.classroom_server.start(
                 lessons,
                 self.port_var.get(),
@@ -1854,11 +1892,19 @@ class ClassroomPage(ttk.Frame):
                 enhanced_audio=self.enhanced_audio_var.get(),
                 french_clarity=self.french_clarity_var.get(),
                 builtin_french=self.builtin_french_var.get(),
+                performance_mode=self.app.performance.requested_mode,
+                precache_audio=is_exam or self.app.performance.low_memory,
+                progress_callback=audio_progress,
             )
             self.url_var.set(url)
             self.code_var.set(code)
             mode_text = "Exam" if is_exam else "Classroom"
-            self.session_summary_var.set(f"{mode_text}: {title} · {len(lessons)} passage(s)")
+            prepared = self.app.classroom_server.audio_prepared_count
+            total_audio = self.app.classroom_server.audio_prepared_total
+            audio_text = f" · audio ready {prepared}/{total_audio}" if total_audio else ""
+            self.session_summary_var.set(
+                f"{mode_text}: {title} · {len(lessons)} passage(s){audio_text} · {self.app.performance.label}"
+            )
             self.start_button.configure(state="disabled")
             self.stop_button.configure(state="normal")
             self.lesson_listbox.configure(state="disabled")
@@ -1869,6 +1915,8 @@ class ClassroomPage(ttk.Frame):
                 parent=self,
             )
         except Exception as exc:
+            self.start_button.configure(state="normal")
+            self.session_summary_var.set("")
             messagebox.showerror(f"Could not start {'exam' if is_exam else 'classroom'}", str(exc), parent=self)
 
     def stop_server(self):
@@ -1949,7 +1997,7 @@ class SettingsPage(ttk.Frame):
         ttk.Label(header, text="TEACHER ONLY", style="RoleBadge.TLabel").pack(side="right")
         ttk.Label(
             self,
-            text="Security controls, local backups and system voice management.",
+            text="Security controls, performance, local backups and system voice management.",
             style="Muted.TLabel",
         ).pack(anchor="w", pady=(4, 16))
 
@@ -1981,6 +2029,31 @@ class SettingsPage(ttk.Frame):
         ).grid(row=1, column=1, sticky="w")
         RoundedButton(session, text="Save", style="Accent.TButton", command=self.save_lock_setting).grid(row=1, column=2, sticky="e", padx=(12, 0))
 
+        performance = Card(self)
+        performance.pack(fill="x", pady=(0, 12))
+        performance.columnconfigure(1, weight=1)
+        ttk.Label(performance, text="Performance", style="CardSectionTitle.TLabel").grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 8))
+        ttk.Label(
+            performance,
+            text="Automatic is recommended. It detects low-memory PCs and uses disk-cached exam audio, lower UI overhead and conservative neural-voice CPU settings.",
+            style="CardMuted.TLabel",
+            wraplength=760,
+        ).grid(row=1, column=0, columnspan=3, sticky="w")
+        saved_mode = self.db.get_setting("performance_mode", "auto")
+        mode_labels = {"auto": "Automatic (recommended)", "low": "Low-memory / HDD", "standard": "Standard / SSD"}
+        self.performance_var = tk.StringVar(value=mode_labels.get(saved_mode, mode_labels["auto"]))
+        ttk.Label(performance, text="Mode").grid(row=2, column=0, sticky="w", pady=(12, 0), padx=(0, 12))
+        ttk.Combobox(
+            performance,
+            textvariable=self.performance_var,
+            values=list(mode_labels.values()),
+            state="readonly",
+            width=25,
+        ).grid(row=2, column=1, sticky="w", pady=(12, 0))
+        RoundedButton(performance, text="Apply", style="Accent.TButton", command=self.save_performance_setting).grid(row=2, column=2, sticky="e", pady=(12, 0), padx=(12, 0))
+        self.performance_info = ttk.Label(performance, text="", style="CardMuted.TLabel")
+        self.performance_info.grid(row=3, column=0, columnspan=3, sticky="w", pady=(8, 0))
+
         data = Card(self)
         data.pack(fill="x", pady=(0, 12))
         ttk.Label(data, text="Local data", style="CardSectionTitle.TLabel").pack(anchor="w", pady=(0, 8))
@@ -2000,11 +2073,45 @@ class SettingsPage(ttk.Frame):
         self.refresh()
 
     def refresh(self):
+        if hasattr(self, "performance_info"):
+            self.performance_info.configure(
+                text=f"Active: {self.app.performance.label} · {self.app.performance.hardware_summary}"
+            )
         english = len(self.app.voices_for_language("en"))
         french = len(self.app.voices_for_language("fr"))
-        neural = "Built-in French neural voice ready" if builtin_french_available() else "Built-in French neural voice missing"
+        neural = "Built-in French neural voice ready" if builtin_french_available() else "Built-in French neural voice unavailable"
         system_count = sum(1 for voice in self.app.voices if not voice.id.startswith("dictatype:piper:"))
-        self.voice_label.configure(text=f"{neural}. Detected {system_count} Windows voice(s): {english} English-compatible, {french} French-compatible including the built-in voice when available.")
+        french_system = sum(
+            1
+            for voice in self.app.voices_for_language("fr")
+            if not voice.id.startswith("dictatype:piper:")
+        )
+        self.voice_label.configure(
+            text=(
+                f"{neural}. Windows voices: {system_count} total · "
+                f"{english} English-compatible · {french_system} French-compatible."
+            )
+        )
+
+    def save_performance_setting(self):
+        reverse = {
+            "Automatic (recommended)": "auto",
+            "Low-memory / HDD": "low",
+            "Standard / SSD": "standard",
+        }
+        requested = reverse.get(self.performance_var.get(), "auto")
+        self.db.set_setting("performance_mode", requested)
+        self.app.performance = resolve_performance_profile(requested)
+        apply_runtime_hints(self.app.performance)
+        self.refresh()
+        classroom = self.app.pages.get("classroom")
+        if classroom is not None and hasattr(classroom, "_refresh_performance_status"):
+            classroom._refresh_performance_status()
+        messagebox.showinfo(
+            "Performance updated",
+            f"DictaType is now using {self.app.performance.label}. The setting is saved for future starts.",
+            parent=self,
+        )
 
     def save_lock_setting(self):
         value = self.lock_var.get()
@@ -2202,6 +2309,8 @@ class DictaTypeApp(tk.Tk):
     def __init__(self, db_path: Path | None = None):
         super().__init__()
         self.db = Database(db_path)
+        self.performance = resolve_performance_profile(self.db.get_setting("performance_mode", "auto"))
+        apply_runtime_hints(self.performance)
         # The redesigned interface intentionally uses the grey + light-blue palette.
         self.colors = LIGHT
         self.speech = SpeechEngine()
@@ -2229,7 +2338,7 @@ class DictaTypeApp(tk.Tk):
         self.bind("<Escape>", lambda _e: self.attributes("-fullscreen", False))
         self.bind_all("<KeyPress>", self.touch_activity, add="+")
         self.bind_all("<Button>", self.touch_activity, add="+")
-        self.after(60, self._drain_ui_queue)
+        self.after(100 if self.performance.low_memory else 60, self._drain_ui_queue)
         self.after(30_000, self._security_tick)
         self.show_login()
 
@@ -2249,7 +2358,7 @@ class DictaTypeApp(tk.Tk):
                 callback()
             except Exception:
                 pass
-        self.after(60, self._drain_ui_queue)
+        self.after(100 if self.performance.low_memory else 60, self._drain_ui_queue)
 
     def _configure_styles(self):
         c = self.colors
